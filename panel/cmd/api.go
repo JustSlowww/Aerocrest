@@ -27,7 +27,13 @@ func (app *api) Mount() http.Handler {
 	r.Use(middleware.Logger)
 	r.Use(middleware.Recoverer)
 	r.Use(middleware.Timeout(90 * time.Second))
-	tmpl := template.Must(template.ParseGlob("templates/*.html"))
+	tmpl := template.Must(template.ParseGlob("cmd/templates/*.html"))
+	r.NotFound(func(w http.ResponseWriter, request *http.Request) {
+		err := tmpl.ExecuteTemplate(w, "NotFound.html", nil)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+		}
+	})
 	r.Get("/", func(w http.ResponseWriter, r *http.Request) {
 		err := tmpl.ExecuteTemplate(w, "index.html", map[string]string{
 			"Title": "Aerocrest",
@@ -36,6 +42,13 @@ func (app *api) Mount() http.Handler {
 		if err != nil {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 		}
+	})
+	r.Post("/login", func(w http.ResponseWriter, request *http.Request) {
+		username := request.FormValue("username")
+		password := request.FormValue("password")
+		msg := fmt.Sprintf("Login info: \n Username: %s \n Password: %s", username, password)
+
+		w.Write([]byte(msg))
 	})
 	return r
 }
