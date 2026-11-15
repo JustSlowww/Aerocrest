@@ -1,7 +1,8 @@
-package cmd
+package main
 
 import (
 	"fmt"
+	"html/template"
 	"net/http"
 	"time"
 
@@ -26,9 +27,15 @@ func (app *api) Mount() http.Handler {
 	r.Use(middleware.Logger)
 	r.Use(middleware.Recoverer)
 	r.Use(middleware.Timeout(90 * time.Second))
-
+	tmpl := template.Must(template.ParseGlob("templates/*.html"))
 	r.Get("/", func(w http.ResponseWriter, r *http.Request) {
-		w.Write([]byte("Welcome to the aerocrest panel backend api"))
+		err := tmpl.ExecuteTemplate(w, "index.html", map[string]string{
+			"Title": "Aerocrest",
+			"Msg":   "Welcome to the aerocrest homepage",
+		})
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+		}
 	})
 	return r
 }

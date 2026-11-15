@@ -1,4 +1,4 @@
-package cmd
+package main
 
 import (
 	"log/slog"
@@ -25,6 +25,7 @@ func main() {
 	cfgFile, err := ini.Load(filepath.Join(appDir, "aerocrest.cfg"))
 	if err != nil {
 		logger.Error("Failed to load config", "error", err)
+		os.Exit(1)
 	}
 
 	port := cfgFile.Section("").Key("port").String()
