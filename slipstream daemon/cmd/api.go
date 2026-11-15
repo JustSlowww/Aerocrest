@@ -91,7 +91,8 @@ func (app *api) Mount() http.Handler {
 			r.Post("/", func(writer http.ResponseWriter, request *http.Request) {
 				image := request.URL.Query().Get("image")
 				containerName := request.URL.Query().Get("name")
-				mem, err := strconv.Atoi(request.URL.Query().Get("ram"))
+				mem, err := strconv.Atoi(request.URL.Query().Get("ram")) // in mb
+				ssd := request.URL.Query().Get("ssd")                    // format ex 500M
 				mcVer := request.URL.Query().Get("version")
 				if mcVer == "" {
 					mcVer = "LATEST"
@@ -127,6 +128,9 @@ func (app *api) Mount() http.Handler {
 						Memory:    int64(mem) * 1024 * 1024,
 						CPUPeriod: 100000,
 						CPUQuota:  int64(math.Round(100000 * cpuCount)),
+						StorageOpt: map[string]string{
+							"size": ssd,
+						},
 						PortBindings: map[docker.Port][]docker.PortBinding{
 							"25565/tcp": {{HostIP: "0.0.0.0", HostPort: "0"}},
 						},

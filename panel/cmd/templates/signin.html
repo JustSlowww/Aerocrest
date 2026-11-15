@@ -1,0 +1,45 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>Aerocrest panel - Sign-in</title>
+    <link
+            rel="stylesheet"
+            href="https://cdn.jsdelivr.net/npm/@picocss/pico@2/css/pico.conditional.min.css">
+    <style>
+        main.container {
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            min-height: 100vh;
+            flex-direction: column;
+        }
+        h1.title {
+            margin-bottom: 6rem;
+        }
+        .rounded {
+            border-radius: 0.7rem !important;
+        }
+    </style>
+</head>
+<body class="pico">
+
+<main class="container">
+    <h1 class="title">Aerocrest Panel</h1>
+    <form action="/login" method="POST">
+        <fieldset>
+            <label>
+                Username
+                <input class="rounded" name="username" placeholder="Username" autocomplete="username" maxlength="64" required/>
+            </label>
+            <label>
+                Password
+                <input type="password" class="rounded" name="password" placeholder="Password" autocomplete="current-password" maxlength="72" required/>
+            </label>
+        </fieldset>
+        <input class="rounded" type="submit" value="Login"/>
+        <a class="signup" href="/signup">Sign-Up</a>
+    </form>
+</main>
+</body>
+</html>

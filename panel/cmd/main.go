@@ -29,14 +29,24 @@ func main() {
 	}
 
 	port := cfgFile.Section("").Key("port").String()
+
+	// dbConfig
+	dbPass := cfgFile.Section("").Key("dbPass").String()
+	dbName := cfgFile.Section("").Key("dbName").String()
+	dbPort := cfgFile.Section("").Key("dbPort").String()
+
+	dbCfg := dbConfig{
+		dbPass: dbPass,
+		dbName: dbName,
+		dbPort: dbPort,
+	}
 	cfg := config{
 		addr:     ":" + port,
 		wTimeout: 120 * time.Second,
 		rTimeout: 60 * time.Second,
 	}
 
-	app := api{config: cfg}
-
+	app := api{config: cfg, dbConfig: dbCfg}
 	h := app.Mount()
 	err = app.Run(h)
 	if err != nil {

@@ -1,0 +1,57 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>Aerocrest panel - Sign-up</title>
+    <link
+            rel="stylesheet"
+            href="https://cdn.jsdelivr.net/npm/@picocss/pico@2/css/pico.conditional.min.css">
+    <style>
+        main.container {
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            min-height: 100vh;
+            flex-direction: column;
+        }
+        h1.head {
+            margin-bottom: 6rem;
+        }
+        .rounded {
+            border-radius: 0.7rem !important;
+        }
+        p.color {
+            color: red;
+        }
+    </style>
+</head>
+<body class="pico">
+
+<main class="container">
+    <h1 class="head">Aerocrest Panel</h1>
+    <form action="/signup" method="POST">
+        <fieldset>
+            <label>
+                Username
+                <input class="rounded" name="username" placeholder="Username" autocomplete="username" maxlength="64" required/>
+            </label>
+            <label>
+                Password
+                <input type="password" class="rounded" name="password" placeholder="Password" autocomplete="current-password" maxlength="72" required/>
+            </label>
+        </fieldset>
+        <input class="rounded" type="submit" value="Sign-up"/>
+        <a class="login" href="/login">Log-in</a>
+        {{ if .ShowError}}
+            <p class="color">Could not create an account</p>
+        {{ end }}
+    </form>
+
+</main>
+<script>
+    if (window.location.search.includes("error=")) {
+        window.history.replaceState({}, document.title, window.location.pathname);
+    }
+</script>
+</body>
+</html>
