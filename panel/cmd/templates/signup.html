@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
     <meta charset="UTF-8">
-    <title>Aerocrest panel - Sign-up</title>
+    <title>Aerocrest panel - Sign-in</title>
     <link
             rel="stylesheet"
             href="https://cdn.jsdelivr.net/npm/@picocss/pico@2/css/pico.conditional.min.css">
@@ -11,11 +11,22 @@
             display: flex;
             justify-content: center;
             align-items: center;
-            min-height: 100vh;
             flex-direction: column;
+            border-color: white;
+            border-style: solid;
+            width: fit-content;
+            padding: 25px;
+            border-radius: 1rem;
+            box-shadow: 0 4px 16px 2px rgba(255, 255, 255, 0.15);
+            transition: box-shadow 0.3s ease-in-out;
+            padding-top: 0;
         }
-        h1.head {
-            margin-bottom: 6rem;
+        main.container:hover {
+            box-shadow: 0 4px 16px 2px rgba(255, 255, 255, 0.3);
+        }
+        h1.title {
+            margin-top: 2rem;
+            margin-bottom: 2rem;
         }
         .rounded {
             border-radius: 0.7rem !important;
@@ -30,31 +41,46 @@
             overflow-wrap: break-word;
             word-break: break-word;
         }
+        div.coolDiv {
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            min-height: 100vh;
+
+        }
+        div.betterdiv {
+            display: flex;
+            justify-content: center;
+            align-items: center;
+        }
     </style>
 </head>
 <body class="pico">
-
-<main class="container">
-    <h1 class="head">Aerocrest Panel</h1>
-    <form action="/signup" method="POST">
-        <fieldset>
-            <label>
-                Username
-                <input class="rounded" name="username" placeholder="Username" autocomplete="username" maxlength="64" required/>
-            </label>
-            <label>
-                Password
-                <input type="password" class="rounded" name="password" placeholder="Password" autocomplete="current-password" maxlength="72" required/>
-            </label>
-        </fieldset>
-        <input class="rounded" type="submit" value="Sign-up"/>
-        <a class="login" href="/login">Log-in</a>
-        {{ if .ShowError}}
+<div class="coolDiv">
+    <main class="container">
+        <div class="betterdiv">
+            <h1 class="title">Aerocrest Panel</h1>
+        </div>
+        <form action="/signup" method="POST">
+            <fieldset>
+                <label>
+                    Username
+                    <input class="rounded" name="username" placeholder="Username" autocomplete="username" maxlength="64" required/>
+                </label>
+                <label>
+                    Password
+                    <input type="password" class="rounded" name="password" placeholder="Password" autocomplete="current-password" maxlength="72" required/>
+                </label>
+            </fieldset>
+            <input class="rounded" type="submit" value="Sign-Up"/>
+            <a class="login" href="/login">Login</a>
+            {{ if .ShowError}}
             <p class="color">{{ .ErrorMsg }}</p>
-        {{ end }}
-    </form>
+            {{ end }}
+        </form>
+    </main>
+</div>
 
-</main>
 <script>
     if (window.location.search.includes("error=")) {
         window.history.replaceState({}, document.title, window.location.pathname);

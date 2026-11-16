@@ -89,19 +89,21 @@ func (app *api) Mount() http.Handler {
 	router.Get("/", func(w http.ResponseWriter, r *http.Request) {
 		_, validSession, err := getSessionValidity(r.Context(), pool, r) // _ is userid
 		if err != nil {
-			http.Error(w, err.Error(), http.StatusForbidden)
+			log.Printf("session validity check failed, error : %s", err.Error())
+			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return
 		}
 		if !validSession {
 			http.Redirect(w, r, "/login", http.StatusSeeOther)
 			return
 		}
-		w.Write([]byte("DASHBOARDDDDDD"))
+		w.Write([]byte("Welcome to the aero crest dashboard"))
 	})
 	router.Get("/login", func(w http.ResponseWriter, r *http.Request) {
 		_, validSession, _ := getSessionValidity(r.Context(), pool, r)
 		if validSession {
 			http.Redirect(w, r, "/", http.StatusSeeOther)
+			return
 		}
 		errType := r.URL.Query().Get("error")
 		var data AuthPageData
@@ -120,6 +122,7 @@ func (app *api) Mount() http.Handler {
 		_, validSession, _ := getSessionValidity(r.Context(), pool, r)
 		if validSession {
 			http.Redirect(w, r, "/", http.StatusSeeOther)
+			return
 		}
 		errType := r.URL.Query().Get("error")
 		var data AuthPageData
@@ -172,11 +175,11 @@ func (app *api) Mount() http.Handler {
 			err := deleteExpiredSessions(r.Context(), pool, userId)
 			if err != nil {
 				log.Printf("session cleanup failed %s", err.Error())
-				return
 			}
 			rawToken, err := createSession(r.Context(), pool, userId, middleware.GetClientIPAddr(r.Context()).String())
 			if err != nil {
 				log.Printf("could not create a new session %s", err.Error())
+				http.Error(w, "internal server error", http.StatusInternalServerError)
 				return
 			}
 			http.SetCookie(w, &http.Cookie{
@@ -223,6 +226,7 @@ func (app *api) Mount() http.Handler {
 		rawToken, err := createSession(r.Context(), pool, userId, middleware.GetClientIPAddr(r.Context()).String())
 		if err != nil {
 			log.Printf("could not create a new session %s", err.Error())
+			http.Error(w, "internal server error", http.StatusInternalServerError)
 			return
 		}
 		http.SetCookie(w, &http.Cookie{
@@ -282,7 +286,7 @@ func getUser(ctx context.Context, pool *pgxpool.Pool, username string) (string, 
 	var userId uuid.UUID
 	err := pool.QueryRow(ctx, query, username).Scan(&userId, &pswdHash)
 	if err != nil {
-		if errors.Is(pgx.ErrNoRows, err) {
+		if errors.Is(err, pgx.ErrNoRows) {
 			return "", "", fmt.Errorf("user not found")
 		}
 		return "", "", err
@@ -346,8 +350,8 @@ func getSessionValidity(ctx context.Context, pool *pgxpool.Pool, r *http.Request
 	var userId string
 	err = pool.QueryRow(ctx, query, tokenHash).Scan(&dbSha, &userId)
 	if err != nil {
-		if errors.Is(pgx.ErrNoRows, err) {
-			return "", false, fmt.Errorf("user not found")
+		if errors.Is(err, pgx.ErrNoRows) {
+			return "", false, nil
 		}
 		return "", false, err
 	}
