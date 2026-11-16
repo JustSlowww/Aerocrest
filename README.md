@@ -1,4 +1,4 @@
-<h1 style="text-align: center">Aerocrest</h1>
+<h1 align="center">Aerocrest</h1>
 A Fast Hosting Management Panel Made with GO, chi and go's HTML template package
 
 ### What is aerocrest ?
