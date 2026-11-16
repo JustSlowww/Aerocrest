@@ -20,6 +20,16 @@
         .rounded {
             border-radius: 0.7rem !important;
         }
+        form {
+            width: 100%;
+            max-width: 400px;
+            min-width: 0;
+        }
+        p.color {
+            color: red;
+            overflow-wrap: break-word;
+            word-break: break-word;
+        }
     </style>
 </head>
 <body class="pico">
@@ -39,7 +49,15 @@
         </fieldset>
         <input class="rounded" type="submit" value="Login"/>
         <a class="signup" href="/signup">Sign-Up</a>
+        {{ if .ShowError}}
+        <p class="color">{{ .ErrorMsg }}</p>
+        {{ end }}
     </form>
 </main>
+<script>
+    if (window.location.search.includes("error=")) {
+        window.history.replaceState({}, document.title, window.location.pathname);
+    }
+</script>
 </body>
 </html>
