@@ -197,7 +197,7 @@ func (app *api) Mount() http.Handler {
 		switch errType {
 		case "invalid":
 			data.ShowError = true
-			data.ErrorMsg = "could not sign in. password or username is invalid"
+			data.ErrorMsg = "password or username is invalid"
 		}
 		err := tmpl.ExecuteTemplate(w, "login", data)
 		if err != nil {
@@ -216,10 +216,10 @@ func (app *api) Mount() http.Handler {
 		switch errType {
 		case "invalid":
 			data.ShowError = true
-			data.ErrorMsg = "could not create new account. password or username is invalid"
+			data.ErrorMsg = "password or username is invalid"
 		case "exists":
 			data.ShowError = true
-			data.ErrorMsg = "could not create new account. Username is already used"
+			data.ErrorMsg = "Username is already used"
 		case "internal":
 			data.ShowError = true
 			data.ErrorMsg = "could not create a new account. Internal server error"
@@ -327,7 +327,29 @@ func (app *api) Mount() http.Handler {
 		})
 		http.Redirect(w, r, "/", http.StatusSeeOther)
 	})
-
+	router.Post("/logout", func(w http.ResponseWriter, r *http.Request) {
+		err := logout(r.Context(), pool, r)
+		if err != nil {
+			log.Printf("could not logout %s", err.Error())
+			http.Error(w, "internal server error. Logout failed", http.StatusInternalServerError)
+		}
+		http.SetCookie(w, &http.Cookie{
+			Name:     "session_token",
+			Value:    "",
+			MaxAge:   -1,
+			Expires:  time.Unix(0, 0),
+			HttpOnly: true,
+			Secure:   true,
+			SameSite: http.SameSiteLaxMode,
+			Path:     "/",
+		})
+		if r.Header.Get("HX-Request") == "true" {
+			w.Header().Set("HX-Redirect", "/login")
+			w.WriteHeader(http.StatusOK)
+			return
+		}
+		http.Redirect(w, r, "/login", http.StatusSeeOther)
+	})
 	return router
 }
 func (app *api) Run(h http.Handler) error {
@@ -544,4 +566,26 @@ func getUserServers(ctx context.Context, pool *pgxpool.Pool, userId string) ([]s
 		return nil, err
 	}
 	return serversList, nil
+}
+
+func logout(ctx context.Context, pool *pgxpool.Pool, r *http.Request) error {
+	cookie, err := r.Cookie("session_token")
+	if err != nil {
+		return err
+	}
+	rawToken := cookie.Value
+	tokenHash := hashToken(rawToken)
+	query := `SELECT user_id FROM sessions WHERE token_hash=$1 AND expires_at > NOW()`
+	var userId string
+	err = pool.QueryRow(ctx, query, tokenHash).Scan(&userId)
+	if err != nil {
+		return err
+	}
+	query = `DELETE FROM sessions WHERE user_id=$1`
+	_, err = pool.Exec(ctx, query, userId)
+	if err != nil {
+		return err
+	}
+
+	return nil
 }
