@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/rand"
 	"crypto/sha256"
+	"embed"
 	"encoding/base64"
 	"encoding/hex"
 	"errors"
@@ -17,6 +18,7 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgtype"
 
 	"github.com/alexedwards/argon2id"
 	"github.com/go-chi/chi/v5"
@@ -25,6 +27,9 @@ import (
 	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
+
+//go:embed templates/*.html templates/app/*.html templates/partials/*.html
+var templateFS embed.FS
 
 type api struct {
 	config   config
@@ -47,6 +52,15 @@ type config struct {
 	addr     string
 	wTimeout time.Duration
 	rTimeout time.Duration
+}
+
+func renderPage(w http.ResponseWriter, pageFile string, data any) error {
+	tmpl := template.Must(template.ParseFS(templateFS,
+		"templates/app/base.html",
+		"templates/partials/nav.html",
+		"templates/app/"+pageFile,
+	))
+	return tmpl.ExecuteTemplate(w, "base", data)
 }
 
 func (app *api) Mount() http.Handler {
@@ -78,7 +92,9 @@ func (app *api) Mount() http.Handler {
 	if err != nil {
 		log.Fatalf("could not init sessions table. Err: %s", err.Error())
 	}
-	tmpl := template.Must(template.ParseGlob("cmd/templates/*.html"))
+	tmpl := template.Must(template.ParseFS(templateFS,
+		"templates/*.html",
+	))
 	router.NotFound(func(w http.ResponseWriter, request *http.Request) {
 		w.WriteHeader(http.StatusNotFound)
 		err := tmpl.ExecuteTemplate(w, "NotFound.html", nil)
@@ -97,7 +113,48 @@ func (app *api) Mount() http.Handler {
 			http.Redirect(w, r, "/login", http.StatusSeeOther)
 			return
 		}
-		w.Write([]byte("Welcome to the aero crest dashboard"))
+		tokenMap, err := getUserInfoFromSessionToken(r.Context(), pool, r)
+		if err != nil {
+			log.Printf("failed to get user info from session token: %s", err.Error())
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		err = renderPage(w, "home.html", map[string]string{
+			"Title":    "Dashboard",
+			"Username": tokenMap["username"].(string),
+		})
+		if err != nil {
+			log.Printf("failed to render template: %s", err.Error())
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+	})
+	router.Get("/servers", func(w http.ResponseWriter, r *http.Request) {
+		_, validSession, err := getSessionValidity(r.Context(), pool, r) // _ is userid
+		if err != nil {
+			log.Printf("session validity check failed, error : %s", err.Error())
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		if !validSession {
+			http.Redirect(w, r, "/login", http.StatusSeeOther)
+			return
+		}
+		tokenMap, err := getUserInfoFromSessionToken(r.Context(), pool, r)
+		if err != nil {
+			log.Printf("failed to get user info from session token: %s", err.Error())
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		err = renderPage(w, "nodesList.html", map[string]string{
+			"Title":    "Servers",
+			"Username": tokenMap["username"].(string),
+		})
+		if err != nil {
+			log.Printf("failed to render template: %s", err.Error())
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
 	})
 	router.Get("/login", func(w http.ResponseWriter, r *http.Request) {
 		_, validSession, _ := getSessionValidity(r.Context(), pool, r)
@@ -112,7 +169,7 @@ func (app *api) Mount() http.Handler {
 			data.ShowError = true
 			data.ErrorMsg = "could not sign in. password or username is invalid"
 		}
-		err := tmpl.ExecuteTemplate(w, "login.html", data)
+		err := tmpl.ExecuteTemplate(w, "login", data)
 		if err != nil {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return
@@ -137,7 +194,7 @@ func (app *api) Mount() http.Handler {
 			data.ShowError = true
 			data.ErrorMsg = "could not create a new account. Internal server error"
 		}
-		err := tmpl.ExecuteTemplate(w, "signup.html", data)
+		err := tmpl.ExecuteTemplate(w, "signup", data)
 		if err != nil {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return
@@ -366,4 +423,33 @@ func deleteExpiredSessions(ctx context.Context, pool *pgxpool.Pool, userId strin
 		return err
 	}
 	return nil
+}
+
+func getUserInfoFromSessionToken(ctx context.Context, pool *pgxpool.Pool, r *http.Request) (map[string]any, error) {
+	cookie, err := r.Cookie("session_token")
+	if err != nil {
+		return nil, err
+	}
+	rawToken := cookie.Value
+	tokenHash := hashToken(rawToken)
+	query := `SELECT user_id FROM sessions WHERE token_hash=$1 AND expires_at > NOW()`
+	var userId string
+	err = pool.QueryRow(ctx, query, tokenHash).Scan(&userId)
+	if err != nil {
+		return nil, err
+	}
+	query = `SELECT username,perms,created_at FROM users WHERE user_id=$1`
+	var username string
+	var perms string
+	var createdAt pgtype.Timestamp
+	err = pool.QueryRow(ctx, query, userId).Scan(&username, &perms, &createdAt)
+	if err != nil {
+		return nil, err
+	}
+	return map[string]any{
+		"username":  username,
+		"userId":    userId,
+		"perms":     perms,
+		"createdAt": createdAt,
+	}, nil
 }

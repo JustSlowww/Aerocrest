@@ -1,0 +1,44 @@
+{{define "partials/nav"}}
+<style>
+    div.items {
+        display: flex;
+        justify-content: flex-end;
+        padding-right: 40px;
+    }
+    div.name {
+        display: flex;
+        justify-content: flex-start;
+        padding-left: 40px;
+    }
+    nav.pico {
+        background-color: rgb(19 22 30 / 0.8);
+        border-bottom: 1px solid rgb(37 40 48 / 0.8);
+    }
+</style>
+<nav class="pico">
+    <div class="name">
+        <ul>
+            <li><strong>Aerocrest</strong></li>
+        </ul>
+    </div>
+   <div class="items">
+       <ul>
+           <li><a href="/" class="secondary">Home</a></li>
+           <li><a href="/servers" class="secondary">Servers</a></li>
+           <li><a href="/wallet" class="secondary">Wallet</a></li>
+           <li>
+               <details class="dropdown">
+                   <summary>
+                       {{ .Username }}
+                   </summary>
+                   <ul dir="rtl">
+                       <li><a>Profile</a></li>
+                       <li><a>Settings</a></li>
+                       <li><a>Logout</a></li>
+                   </ul>
+               </details>
+           </li>
+       </ul>
+   </div>
+</nav>
+{{end}}
