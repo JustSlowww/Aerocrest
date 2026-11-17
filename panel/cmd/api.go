@@ -54,6 +54,21 @@ type config struct {
 	rTimeout time.Duration
 }
 
+type nodes struct {
+	NodeId   string `db:"nodeId"`
+	NodeName string `db:"name"`
+}
+
+type servers struct {
+	ServerId string `db:"serverid"`
+	NodeId   string `db:"nodeid"`
+	Name     string `db:"name"`
+	Image    string `db:"image"`
+	TamMb    string `db:"ram_mb"`
+	CpuLimit string `db:"cpu_limit"`
+	DiskMb   string `db:"disk_mb"`
+}
+
 func renderPage(w http.ResponseWriter, pageFile string, data any) error {
 	tmpl := template.Must(template.ParseFS(templateFS,
 		"templates/app/base.html",
@@ -91,6 +106,14 @@ func (app *api) Mount() http.Handler {
 	err = initSessionsTable(ctx, pool)
 	if err != nil {
 		log.Fatalf("could not init sessions table. Err: %s", err.Error())
+	}
+	err = initNodesTable(ctx, pool)
+	if err != nil {
+		log.Fatalf("could not init nodes table. Err: %s", err.Error())
+	}
+	err = initServersTable(ctx, pool)
+	if err != nil {
+		log.Fatalf("could not init servers table. Err: %s", err.Error())
 	}
 	tmpl := template.Must(template.ParseFS(templateFS,
 		"templates/*.html",
@@ -130,7 +153,7 @@ func (app *api) Mount() http.Handler {
 		}
 	})
 	router.Get("/servers", func(w http.ResponseWriter, r *http.Request) {
-		_, validSession, err := getSessionValidity(r.Context(), pool, r) // _ is userid
+		userId, validSession, err := getSessionValidity(r.Context(), pool, r) // _ is userid
 		if err != nil {
 			log.Printf("session validity check failed, error : %s", err.Error())
 			http.Error(w, err.Error(), http.StatusInternalServerError)
@@ -146,9 +169,16 @@ func (app *api) Mount() http.Handler {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return
 		}
-		err = renderPage(w, "nodesList.html", map[string]string{
+		serversList, err := getUserServers(r.Context(), pool, userId)
+		if err != nil {
+			log.Printf("failed to get servers List from user id: %s", err.Error())
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		err = renderPage(w, "serversList.html", map[string]any{
 			"Title":    "Servers",
 			"Username": tokenMap["username"].(string),
+			"servers":  serversList,
 		})
 		if err != nil {
 			log.Printf("failed to render template: %s", err.Error())
@@ -452,4 +482,66 @@ func getUserInfoFromSessionToken(ctx context.Context, pool *pgxpool.Pool, r *htt
 		"perms":     perms,
 		"createdAt": createdAt,
 	}, nil
+}
+
+func initNodesTable(ctx context.Context, pool *pgxpool.Pool) error {
+	query := `CREATE TABLE IF NOT EXISTS nodes (
+    nodeId varchar(255) PRIMARY KEY,
+    name varchar(255) UNIQUE NOT NULL,
+    ipaddr varchar(15) UNIQUE NOT NULL,
+    port varchar(5) NOT NULL,
+    token varchar(255) UNIQUE NOT NULL,
+    total_disk_mb varchar(255) NOT NULL,
+    total_ram_mb varchar(255) NOT NULL
+)`
+	_, err := pool.Exec(ctx, query)
+	return err
+}
+
+func createNode(ctx context.Context, pool *pgxpool.Pool, nodeName, ipAddr, port, token, totalDisk, totalRam string) (string, error) {
+	query := `INSERT INTO nodes (nodeId, name , ipaddr, port, token, total_disk_mb, total_ram_mb) VALUES ($1, $2, $3, $4, $5, $6, $7)`
+	nodeId := uuid.New().String()
+	_, err := pool.Exec(ctx, query, nodeId, nodeName, ipAddr, port, token, totalDisk, totalRam)
+	return nodeId, err
+}
+
+func getNodes(ctx context.Context, pool *pgxpool.Pool) ([]nodes, error) {
+	query := `SELECT nodeId, name FROM nodes`
+	rows, err := pool.Query(ctx, query)
+	if err != nil {
+		return nil, err
+	}
+	nodesList, err := pgx.CollectRows(rows, pgx.RowToStructByName[nodes])
+	if err != nil {
+		return nil, err
+	}
+	return nodesList, nil
+}
+
+func initServersTable(ctx context.Context, pool *pgxpool.Pool) error {
+	query := `CREATE TABLE IF NOT EXISTS servers (
+    serverId varchar(255) PRIMARY KEY,
+    nodeId varchar(255) NOT NULL REFERENCES nodes(nodeId) ON DELETE CASCADE,
+    name varchar(255) NOT NULL,
+    image varchar(255) NOT NULL,
+    ram_mb varchar(255) NOT NULL,
+    cpu_limit varchar(255) NOT NULL,
+    disk_mb varchar(255) NOT NULL,
+    user_id UUID NOT NULL REFERENCES users(user_id) ON DELETE CASCADE
+)`
+	_, err := pool.Exec(ctx, query)
+	return err
+}
+
+func getUserServers(ctx context.Context, pool *pgxpool.Pool, userId string) ([]servers, error) {
+	query := `SELECT serverId, nodeId, name, image, ram_mb, cpu_limit, disk_mb FROM servers WHERE user_id = $1`
+	rows, err := pool.Query(ctx, query, userId)
+	if err != nil {
+		return nil, err
+	}
+	serversList, err := pgx.CollectRows(rows, pgx.RowToStructByName[servers])
+	if err != nil {
+		return nil, err
+	}
+	return serversList, nil
 }
