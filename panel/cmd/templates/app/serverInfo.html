@@ -1,0 +1,24 @@
+{{define "content"}}
+<ul class="nav nav-tabs nav-fill mt-3" role="tablist">
+    <li class="nav-item" role="presentation">
+        <a class="nav-link active" data-bs-target="#main" data-bs-toggle="tab" type="button" role="tab">Main</a>
+    </li>
+    <li class="nav-item" role="presentation">
+        <a class="nav-link" data-bs-target="#files" data-bs-toggle="tab" type="button" role="tab">Files</a>
+    </li>
+    <li class="nav-item" role="presentation">
+        <a class="nav-link" data-bs-target="#settings" data-bs-toggle="tab" type="button" role="tab">Settings</a>
+    </li>
+</ul>
+<div class="tab-content">
+    <div id="main" class="tab-pane fade show active mt-3" role="tabpanel">
+        <a> Welcome to server {{.server.Name}}</a>
+    </div>
+    <div id="files" class="tab-pane fade mt-3" role="tabpanel">
+        <a> files Tab</a>
+    </div>
+    <div id="settings" class="tab-pane fade mt-3" role="tabpanel">
+        <a> settings Tab</a>
+    </div>
+</div>
+{{end}}

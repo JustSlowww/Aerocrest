@@ -56,8 +56,9 @@ type config struct {
 }
 
 type nodes struct {
-	NodeId   string `db:"nodeId"`
-	NodeName string `db:"name"`
+	NodeId    string `db:"nodeId"`
+	NodeName  string `db:"name"`
+	IpAddress string `db:"ipaddr"`
 }
 
 type servers struct {
@@ -68,6 +69,7 @@ type servers struct {
 	RamMb    string `db:"ram_mb"`
 	CpuLimit string `db:"cpu_limit"`
 	DiskMb   string `db:"disk_mb"`
+	Node     nodes  `db:"-"`
 }
 
 func renderPage(w http.ResponseWriter, pageFile string, data any) error {
@@ -228,6 +230,41 @@ func (app *api) Mount() http.Handler {
 		}
 		err := tmpl.ExecuteTemplate(w, "signup", data)
 		if err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+	})
+	router.Get("/server", func(w http.ResponseWriter, r *http.Request) {
+		_, validSession, err := getSessionValidity(r.Context(), pool, r) // _ is userid
+		if err != nil {
+			log.Printf("session validity check failed, error : %s", err.Error())
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		if !validSession {
+			http.Redirect(w, r, "/login", http.StatusSeeOther)
+			return
+		}
+		serverId := r.URL.Query().Get("uuid")
+		server, err := getServer(r.Context(), pool, serverId)
+		if err != nil {
+			log.Printf("failed to server from uuid: %s", err.Error())
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		tokenMap, err := getUserInfoFromSessionToken(r.Context(), pool, r)
+		if err != nil {
+			log.Printf("failed to get user info from session token: %s", err.Error())
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		err = renderPage(w, "serverInfo.html", map[string]any{
+			"Title":    server.Name,
+			"Username": tokenMap["username"].(string),
+			"server":   server,
+		})
+		if err != nil {
+			log.Printf("failed to render template: %s", err.Error())
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return
 		}
@@ -531,7 +568,7 @@ func createNode(ctx context.Context, pool *pgxpool.Pool, nodeName, ipAddr, port,
 }
 
 func getNodes(ctx context.Context, pool *pgxpool.Pool) ([]nodes, error) {
-	query := `SELECT nodeId, name FROM nodes`
+	query := `SELECT nodeId, name, ipaddr FROM nodes`
 	rows, err := pool.Query(ctx, query)
 	if err != nil {
 		return nil, err
@@ -570,16 +607,43 @@ func getUserServers(ctx context.Context, pool *pgxpool.Pool, userId string) ([]s
 	}
 	var newServersList []servers
 	for _, s := range serversList {
+		query = `SELECT nodeid, name, ipaddr FROM nodes WHERE nodeid = $1`
+		rows, err = pool.Query(ctx, query, s.NodeId)
+		if err != nil {
+			return nil, err
+		}
+		nodesList, err := pgx.CollectRows(rows, pgx.RowToStructByName[nodes])
+		if err != nil {
+			return nil, err
+		}
 		cpuLimit, err := strconv.ParseFloat(s.CpuLimit, 32)
 		if err != nil {
 			return nil, err
 		}
+		s.Node = nodesList[0]
 		newCpuLimit := cpuLimit * 100
 		percentCpuLimit := fmt.Sprintf("%.0f%%", newCpuLimit)
 		s.CpuLimit = percentCpuLimit
 		newServersList = append(newServersList, s)
 	}
 	return newServersList, nil
+}
+
+func getServer(ctx context.Context, pool *pgxpool.Pool, serverId string) (servers, error) {
+	query := `SELECT nodeid, name, image, ram_mb, cpu_limit, disk_mb FROM servers WHERE serverid = $1`
+	var currentServer servers
+	err := pool.QueryRow(ctx, query, serverId).Scan(
+		&currentServer.NodeId,
+		&currentServer.Name,
+		&currentServer.Image,
+		&currentServer.RamMb,
+		&currentServer.CpuLimit,
+		&currentServer.DiskMb,
+	)
+	if err != nil {
+		return servers{}, err
+	}
+	return currentServer, nil
 }
 
 func logout(ctx context.Context, pool *pgxpool.Pool, r *http.Request) error {
