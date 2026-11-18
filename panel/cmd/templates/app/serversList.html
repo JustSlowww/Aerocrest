@@ -9,38 +9,16 @@
         .server {
             display: grid;
         }
-        button.stop {
-            background-color: #D93526 !important;
-            border-color: #D93526 !important;
-            width: auto;
+        button {
+            display: inline-flex;
+            align-items: center;
+            justify-items: center;
+            width: 30px;
+            height: 40px;
         }
-        button.stop:hover {
-            background-color: #EE402E !important;
-            border-color: #EE402E !important;
-        }
-        button.restart {
-            background-color: #D8A100 !important;
-            border-color: #D8A100 !important;
-        }
-        button.restart:hover {
-            background-color: #FECC63 !important;
-            border-color: #FECC63 !important;
-        }
-        button.start:hover {
-            background-color: #55C21E !important;
-            border-color: #55C21E !important;
-        }
-        button.start {
-            background-color: #398712 !important;
-            border-color: #398712 !important;
-            width: auto;
-        }
-        .smallDiv {
-            display: flex;
-            justify-content: flex-start;
-            gap: .5rem;
-            grid-column-start: 2;
-            grid-column-end: 2;
+        button svg {
+            display: block;
+            flex-shrink: 0;
         }
         div.serverGrid {
             display: grid;
@@ -55,38 +33,60 @@
             grid-column-end: 1;
             margin: 0;
         }
+        .textDiv div.hStats {
+            grid-column: 1/-1;
+        }
+        div.hStats {
+            display: grid;
+            grid-template-columns: repeat(3, 1fr);
+            grid-template-rows: repeat(3, auto);
+            gap: 0 1rem;
+        }
+        div.statsWrap {
+            grid-column: 1/-1;
+        }
+        input.newServerButton {
+            padding-right: 10px;
+        }
     </style>
+        <div class="grid">
+            <div></div>
+            <div></div>
+            <div></div>
+            <div></div>
+            <div></div>
+            <div></div>
+            <input class="newServerButton" type="submit" value="Create New Server">
+        </div>
+
     <div id="bigDiv">
         {{range .servers}}
         <div class="server">
             <div class="serverGrid">
-                    <p class="textDiv">
-                        <strong>{{.Name}}</strong>
-                    </p>
-
-                    <div class="smallDiv">
-                        <button type="submit" class="start">
-                            <svg xmlns="http://www.w3.org/2000/svg" width="32" height="32" fill="currentColor" class="bi bi-play" viewBox="0 0 16 16">
-                                <path d="M10.804 8 5 4.633v6.734zm.792-.696a.802.802 0 0 1 0 1.392l-6.363 3.692C4.713 12.69 4 12.345 4 11.692V4.308c0-.653.713-.998 1.233-.696z"/>
-                            </svg>
-                        </button>
-                        <button type="submit" class="restart">
-                            <svg xmlns="http://www.w3.org/2000/svg" width="32" height="32" fill="currentColor" class="bi bi-arrow-clockwise" viewBox="0 0 16 16">
-                                <path fill-rule="evenodd" d="M8 3a5 5 0 1 0 4.546 2.914.5.5 0 0 1 .908-.417A6 6 0 1 1 8 2z"/>
-                                <path d="M8 4.466V.534a.25.25 0 0 1 .41-.192l2.36 1.966c.12.1.12.284 0 .384L8.41 4.658A.25.25 0 0 1 8 4.466"/>
-                            </svg>
-                        </button>
-                        <button type="submit" class="stop">
-                            <svg xmlns="http://www.w3.org/2000/svg" width="32" height="32" fill="currentColor" class="bi bi-power" viewBox="0 0 16 16">
-                                <path d="M7.5 1v7h1V1z"/>
-                                <path d="M3 8.812a5 5 0 0 1 2.578-4.375l-.485-.874A6 6 0 1 0 11 3.616l-.501.865A5 5 0 1 1 3 8.812"/>
-                            </svg>
-                        </button>
+                <p class="textDiv">
+                    <strong>{{.Name}}</strong>
+                </p>
+                <div role="group">
+                    <button type="submit" class="outline">
+                        <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="lucide lucide-play preview-icon"><path d="M5 5a2 2 0 0 1 3.008-1.728l11.997 6.998a2 2 0 0 1 .003 3.458l-12 7A2 2 0 0 1 5 19z"/></svg>
+                    </button>
+                    <button type="submit" class="secondary outline">
+                        <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="lucide lucide-rotate-ccw preview-icon"><path d="M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8"/><path d="M3 3v5h5"/></svg>
+                    </button>
+                    <button type="submit" class="contrast outline">
+                        <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="lucide lucide-power preview-icon"><path d="M12 2v10"/><path d="M18.4 6.6a9 9 0 1 1-12.77.04"/></svg>
+                    </button>
+                </div>
+                <div class="statsWrap">
+                    <p style="text-align: center">Server Stats:</p>
+                    <div class="hStats" style="text-align: center">
+                        <p>RAM: {{.RamMb}} MB</p>
+                        <p>DISK: {{.DiskMb}} MB</p>
+                        <p>CPU: {{.CpuLimit}}</p>
                     </div>
+                </div>
             </div>
         </div>
-
-
         {{end}}
     </div>
 {{end}}

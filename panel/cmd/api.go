@@ -13,6 +13,7 @@ import (
 	"log"
 	"net/http"
 	"net/url"
+	"strconv"
 	"strings"
 	"time"
 
@@ -64,7 +65,7 @@ type servers struct {
 	NodeId   string `db:"nodeid"`
 	Name     string `db:"name"`
 	Image    string `db:"image"`
-	TamMb    string `db:"ram_mb"`
+	RamMb    string `db:"ram_mb"`
 	CpuLimit string `db:"cpu_limit"`
 	DiskMb   string `db:"disk_mb"`
 }
@@ -125,6 +126,7 @@ func (app *api) Mount() http.Handler {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 		}
 	})
+	// GET render new pages and check validity of token
 	router.Get("/", func(w http.ResponseWriter, r *http.Request) {
 		_, validSession, err := getSessionValidity(r.Context(), pool, r) // _ is userid
 		if err != nil {
@@ -284,6 +286,7 @@ func (app *api) Mount() http.Handler {
 			return
 		}
 	})
+	// Signup/login forms post
 	router.Post("/signup", func(w http.ResponseWriter, r *http.Request) {
 		r.Body = http.MaxBytesReader(w, r.Body, 4096)
 		err := r.ParseForm()
@@ -565,7 +568,18 @@ func getUserServers(ctx context.Context, pool *pgxpool.Pool, userId string) ([]s
 	if err != nil {
 		return nil, err
 	}
-	return serversList, nil
+	var newServersList []servers
+	for _, s := range serversList {
+		cpuLimit, err := strconv.ParseFloat(s.CpuLimit, 32)
+		if err != nil {
+			return nil, err
+		}
+		newCpuLimit := cpuLimit * 100
+		percentCpuLimit := fmt.Sprintf("%.0f%%", newCpuLimit)
+		s.CpuLimit = percentCpuLimit
+		newServersList = append(newServersList, s)
+	}
+	return newServersList, nil
 }
 
 func logout(ctx context.Context, pool *pgxpool.Pool, r *http.Request) error {
