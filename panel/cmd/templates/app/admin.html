@@ -1,0 +1,71 @@
+{{define "content"}}
+    <div class="d-flex align-items-start mt-4">
+        <div class="nav flex-column nav-pills me-3" aria-orientation="vertical">
+            <li class="nav-item" role="presentation">
+                <a class="nav-link active" data-bs-target="#main" data-bs-toggle="pill" type="button" role="tab">Main</a>
+            </li>
+            <li class="nav-item" role="presentation">
+                <a class="nav-link" data-bs-target="#nodes" data-bs-toggle="pill" type="button" role="tab">Nodes</a>
+            </li>
+            <li class="nav-item" role="presentation">
+                <a class="nav-link" data-bs-target="#settings" data-bs-toggle="pill" type="button" role="tab">Settings</a>
+            </li>
+        </div>
+        <div class="vr"></div>
+        <div class="tab-content p-2">
+            <div id="main" class="tab-pane fade show active" role="tabpanel">
+                <a>Main admin settings</a>
+            </div>
+            <div id="nodes" class="tab-pane fade" role="tabpanel">
+                <button type="button" class="btn btn-primary float-end" data-bs-toggle="modal" data-bs-target="#newNodesModal"> Add a new node </button>
+            </div>
+            <div id="settings" class="tab-pane fade" role="tabpanel">
+                <a> settings Tab</a>
+            </div>
+        </div>
+    </div>
+
+
+    <!-- New Node Modal Div -->
+        <div class="modal fade" id="newNodesModal" tabindex="-1" aria-labelledby="modalLabel" aria-hidden="true">
+            <div class="modal-dialog modal-dialog-centered">
+                <div class="modal-content">
+                    <div class="modal-header">
+                        <h1 id="modalLabel" class="modal-title fs-3">Add a new node</h1>
+                        <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="close"></button>
+                    </div>
+                    <div class="modal-body">
+                        <form action="/addNode" method="POST">
+                            <fieldset>
+                                <div class="mb-7 input-group">
+                                    <span class="input-group-text">Name</span>
+                                    <input class="form-control" name="name" placeholder="Name" maxlength="255" id="name" required/>
+                                </div>
+                                <hr/>
+                                <div class="mb-7 input-group">
+                                    <span class="input-group-text">IP Address and Port</span>
+                                    <input class="form-control" name="ip" placeholder="IP Address" minlength="7" maxlength="15" id="ip" required/>
+                                    <input class="form-control" name="port" placeholder="Port" maxlength="5" id="port" required/>
+                                </div>
+                                <hr/>
+                                <div class="mb-7 input-group">
+                                    <span class="input-group-text">Access Token:</span>
+                                    <input class="form-control" name="token" placeholder="Access Token" maxlength="255" id="token" type="password" required/>
+                                </div>
+                                <hr/>
+                                <div class="mb-7 input-group">
+                                    <span class="input-group-text">Allocated disk and ram (MB)</span>
+                                    <input class="form-control" name="ram" placeholder="RAM" maxlength="255" id="ram" required/>
+                                    <input class="form-control" name="disk" placeholder="DISK" maxlength="255" id="disk" required/>
+                                </div>
+                                <hr/>
+                                <div class="d-grid gap-2">
+                                    <button type="submit" class="btn btn-primary mb-2" data-bs-dismiss="modal">Add Node</button>
+                                </div>
+                            </fieldset>
+                        </form>
+                    </div>
+                </div>
+            </div>
+        </div>
+{{end}}

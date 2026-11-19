@@ -65,6 +65,9 @@ func (app *api) Mount() http.Handler {
 	r.Get("/health", func(w http.ResponseWriter, r *http.Request) {
 		w.Write([]byte("The API is functioning properly"))
 	})
+	r.Get("/ping", func(w http.ResponseWriter, r *http.Request) {
+		w.Write([]byte("pong"))
+	})
 	r.Get("/", func(w http.ResponseWriter, r *http.Request) {
 		publicIP, _ := pubip.Get()
 		welcomeMsg := fmt.Sprintf("Welcome to your aerocrest daemon! Please set it up on the panel using the following information: \n Token: %s \n Public IP: %s \n Port: %s", app.config.secret, publicIP, strings.TrimPrefix(app.config.addr, ":"))

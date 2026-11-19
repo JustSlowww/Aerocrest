@@ -10,6 +10,7 @@ import (
 	"errors"
 	"fmt"
 	"html/template"
+	"io"
 	"log"
 	"net/http"
 	"net/url"
@@ -268,6 +269,91 @@ func (app *api) Mount() http.Handler {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return
 		}
+	})
+	router.Get("/admin", func(w http.ResponseWriter, r *http.Request) {
+		_, validSession, err := getSessionValidity(r.Context(), pool, r) // _ is userid
+		if err != nil {
+			log.Printf("session validity check failed, error : %s", err.Error())
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		if !validSession {
+			http.Redirect(w, r, "/login", http.StatusSeeOther)
+			return
+		}
+		tokenMap, err := getUserInfoFromSessionToken(r.Context(), pool, r)
+		if err != nil {
+			log.Printf("failed to get user info from session token: %s", err.Error())
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		if tokenMap["perms"] != 1 {
+			http.Redirect(w, r, "/", http.StatusSeeOther)
+			return
+		}
+		// render admin page
+		err = renderPage(w, "admin.html", map[string]any{
+			"Title":    "Admin Settings",
+			"Username": tokenMap["username"].(string),
+		})
+		if err != nil {
+			log.Printf("failed to render template: %s", err.Error())
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+	})
+	router.Post("/addNode", func(w http.ResponseWriter, r *http.Request) {
+		r.Body = http.MaxBytesReader(w, r.Body, 4096)
+		err := r.ParseForm()
+		if err != nil {
+			log.Printf("failed to parse form: %s", err.Error())
+			http.Error(w, "invalid request", http.StatusBadRequest)
+			return
+		}
+		name := r.PostForm.Get("name")
+		ip := r.PostForm.Get("ip")
+		port := r.PostForm.Get("port")
+		token := r.PostForm.Get("token")
+		disk := r.PostForm.Get("disk")
+		ram := r.PostForm.Get("ram")
+		request, err := http.NewRequest("GET", fmt.Sprintf("http://%s:%s/ping", ip, port), nil)
+		if err != nil {
+			log.Printf("node did not respond: %s", err.Error())
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		request.Header.Add("Authorization", "Bearer "+token)
+		do, err := http.DefaultClient.Do(request)
+		if err != nil {
+			log.Printf("node did not respond: %s", err.Error())
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		defer do.Body.Close()
+		if do.StatusCode == http.StatusOK {
+			all, err := io.ReadAll(do.Body)
+			if err != nil {
+				log.Printf("node did not respond: %s", err.Error())
+				http.Error(w, err.Error(), http.StatusInternalServerError)
+				return
+			}
+			if string(all) != "pong" {
+				log.Printf("node did not respond: %s", err.Error())
+				http.Error(w, err.Error(), http.StatusInternalServerError)
+				return
+			}
+		} else {
+			log.Printf("node did not respond: %s", err.Error())
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		_, err = createNode(r.Context(), pool, name, ip, port, token, disk, ram)
+		if err != nil {
+			log.Printf("failed to create node in db: %s", err.Error())
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		http.Redirect(w, r, "/admin", http.StatusSeeOther)
 	})
 	router.Post("/login", func(w http.ResponseWriter, r *http.Request) {
 		r.Body = http.MaxBytesReader(w, r.Body, 4096)
@@ -532,7 +618,7 @@ func getUserInfoFromSessionToken(ctx context.Context, pool *pgxpool.Pool, r *htt
 	}
 	query = `SELECT username,perms,created_at FROM users WHERE user_id=$1`
 	var username string
-	var perms string
+	var perms int
 	var createdAt pgtype.Timestamp
 	err = pool.QueryRow(ctx, query, userId).Scan(&username, &perms, &createdAt)
 	if err != nil {
@@ -550,7 +636,7 @@ func initNodesTable(ctx context.Context, pool *pgxpool.Pool) error {
 	query := `CREATE TABLE IF NOT EXISTS nodes (
     nodeId varchar(255) PRIMARY KEY,
     name varchar(255) UNIQUE NOT NULL,
-    ipaddr varchar(15) UNIQUE NOT NULL,
+    ipaddr varchar(15) NOT NULL,
     port varchar(5) NOT NULL,
     token varchar(255) UNIQUE NOT NULL,
     total_disk_mb varchar(255) NOT NULL,
@@ -620,7 +706,11 @@ func getUserServers(ctx context.Context, pool *pgxpool.Pool, userId string) ([]s
 		if err != nil {
 			return nil, err
 		}
-		s.Node = nodesList[0]
+		if len(nodesList) > 0 {
+			s.Node = nodesList[0]
+		} else {
+			s.Node = nodes{}
+		}
 		newCpuLimit := cpuLimit * 100
 		percentCpuLimit := fmt.Sprintf("%.0f%%", newCpuLimit)
 		s.CpuLimit = percentCpuLimit
