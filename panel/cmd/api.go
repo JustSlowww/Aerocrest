@@ -60,6 +60,9 @@ type nodes struct {
 	NodeId    string `db:"nodeId"`
 	NodeName  string `db:"name"`
 	IpAddress string `db:"ipaddr"`
+	Port      string `db:"port"`
+	DiskTotal string `db:"total_disk_mb"`
+	RamTotal  string `db:"total_ram_mb"`
 }
 
 type servers struct {
@@ -147,9 +150,10 @@ func (app *api) Mount() http.Handler {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return
 		}
-		err = renderPage(w, "home.html", map[string]string{
+		err = renderPage(w, "home.html", map[string]any{
 			"Title":    "Dashboard",
 			"Username": tokenMap["username"].(string),
+			"Perms":    tokenMap["perms"],
 		})
 		if err != nil {
 			log.Printf("failed to render template: %s", err.Error())
@@ -183,6 +187,7 @@ func (app *api) Mount() http.Handler {
 		err = renderPage(w, "serversList.html", map[string]any{
 			"Title":    "Servers",
 			"Username": tokenMap["username"].(string),
+			"Perms":    tokenMap["perms"],
 			"servers":  serversList,
 		})
 		if err != nil {
@@ -262,6 +267,7 @@ func (app *api) Mount() http.Handler {
 		err = renderPage(w, "serverInfo.html", map[string]any{
 			"Title":    server.Name,
 			"Username": tokenMap["username"].(string),
+			"Perms":    tokenMap["perms"],
 			"server":   server,
 		})
 		if err != nil {
@@ -291,10 +297,18 @@ func (app *api) Mount() http.Handler {
 			http.Redirect(w, r, "/", http.StatusSeeOther)
 			return
 		}
+		nodesList, err := getNodes(r.Context(), pool)
+		if err != nil {
+			log.Printf("failed to get nodes list: %s", err.Error())
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
 		// render admin page
 		err = renderPage(w, "admin.html", map[string]any{
 			"Title":    "Admin Settings",
 			"Username": tokenMap["username"].(string),
+			"Perms":    tokenMap["perms"],
+			"nodes":    nodesList,
 		})
 		if err != nil {
 			log.Printf("failed to render template: %s", err.Error())
@@ -654,7 +668,7 @@ func createNode(ctx context.Context, pool *pgxpool.Pool, nodeName, ipAddr, port,
 }
 
 func getNodes(ctx context.Context, pool *pgxpool.Pool) ([]nodes, error) {
-	query := `SELECT nodeId, name, ipaddr FROM nodes`
+	query := `SELECT nodeId, name, ipaddr, port, total_disk_mb, total_ram_mb FROM nodes`
 	rows, err := pool.Query(ctx, query)
 	if err != nil {
 		return nil, err

@@ -16,7 +16,7 @@
             transition: transform 0.3s ease, box-shadow 0.3s ease, border-color 0.3s ease;
             border: 0 solid white;
             border-right: 10px;
-            box-shadow: 0 0 6px rgba(255,255,255,0.65);
+            box-shadow: 0 0 3px rgba(255,255,255,0.4);
 
         }
         .server:hover {
@@ -65,7 +65,7 @@
                         <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="lucide lucide-power preview-icon"><path d="M12 2v10"/><path d="M18.4 6.6a9 9 0 1 1-12.77.04"/></svg>
                     </button>
                 </div>
-                <div >
+                <div>
                     <p>{{.Node.IpAddress}}</p>
                     <p>{{.RamMb}} MB | {{.CpuLimit}} | {{.DiskMb}} MB</p>
                 </div>

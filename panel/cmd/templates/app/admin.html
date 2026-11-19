@@ -1,4 +1,44 @@
 {{define "content"}}
+    <style>
+        .bigDiv {
+            display: grid;
+            grid-template-columns: repeat(3, 1fr);
+            gap: 1.5rem;
+            margin: 1rem 0 0 0;
+        }
+        .node {
+            display: block;
+            text-decoration: none;
+            color: inherit;
+            cursor: pointer;
+            border-radius: 10px;
+            transition: transform 0.5s ease, box-shadow 0.5s ease, border-color 0.5s ease;
+            border: 0 solid white;
+            border-right: 10px;
+            box-shadow: 0 0 3px rgba(255,255,255,0.4);
+        }
+        .node:hover {
+            transform: scale(1.02);
+        }
+        div.nodeGrid {
+            display: grid;
+            align-items: start;
+            padding: 20px;
+            border-radius: 10px;
+            --bs-tertiary-color-rgb: inherit;
+        }
+        div.nodeGrid p {
+            margin: 0;
+        }
+        div.nodeGrid .textDiv{
+            margin-bottom: 0.5rem;
+        }
+        .textDiv {
+            grid-column-start: 1;
+            grid-column-end: 1;
+            margin: 0;
+        }
+    </style>
     <div class="d-flex align-items-start mt-4">
         <div class="nav flex-column nav-pills me-3" aria-orientation="vertical">
             <li class="nav-item" role="presentation">
@@ -12,12 +52,35 @@
             </li>
         </div>
         <div class="vr"></div>
-        <div class="tab-content p-2">
+        <div class="tab-content p-2 flex-grow-1">
             <div id="main" class="tab-pane fade show active" role="tabpanel">
                 <a>Main admin settings</a>
             </div>
             <div id="nodes" class="tab-pane fade" role="tabpanel">
-                <button type="button" class="btn btn-primary float-end" data-bs-toggle="modal" data-bs-target="#newNodesModal"> Add a new node </button>
+                <div class="d-flex justify-content-between align-items-center">
+                    <h3 class="mb-0"><strong>Nodes:</strong></h3>
+                    <button type="button" class="btn btn-primary d-inline-flex align-items-center justify-content-center" data-bs-toggle="modal" data-bs-target="#newNodesModal">
+                        <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" fill="currentColor" class="bi bi-plus" viewBox="0 0 16 16">
+                            <path d="M8 4a.5.5 0 0 1 .5.5v3h3a.5.5 0 0 1 0 1h-3v3a.5.5 0 0 1-1 0v-3h-3a.5.5 0 0 1 0-1h3v-3A.5.5 0 0 1 8 4"/>
+                        </svg>
+                    </button>
+                </div>
+                <hr/>
+                <div class="bigDiv">
+                    {{range .nodes}}
+                        <div class="node">
+                            <div class="nodeGrid">
+                                <p class="textDiv">
+                                    <a><strong>{{.NodeName}}</strong></a>
+                                </p>
+                                <div>
+                                    <p>{{.IpAddress}}:{{.Port}}</p>
+                                    <p>{{.RamTotal}} MB | {{.DiskTotal}} MB</p>
+                                </div>
+                            </div>
+                        </div>
+                    {{end}}
+                </div>
             </div>
             <div id="settings" class="tab-pane fade" role="tabpanel">
                 <a> settings Tab</a>
