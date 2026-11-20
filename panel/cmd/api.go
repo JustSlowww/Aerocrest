@@ -280,7 +280,7 @@ func (app *api) Mount() http.Handler {
 		_, validSession, err := getSessionValidity(r.Context(), pool, r) // _ is userid
 		if err != nil {
 			log.Printf("session validity check failed, error : %s", err.Error())
-			http.Error(w, err.Error(), http.StatusInternalServerError)
+			http.Error(w, fmt.Sprintf("session validity check failed, error : %s", err.Error()), http.StatusInternalServerError)
 			return
 		}
 		if !validSession {
@@ -290,7 +290,7 @@ func (app *api) Mount() http.Handler {
 		tokenMap, err := getUserInfoFromSessionToken(r.Context(), pool, r)
 		if err != nil {
 			log.Printf("failed to get user info from session token: %s", err.Error())
-			http.Error(w, err.Error(), http.StatusInternalServerError)
+			http.Error(w, fmt.Sprintf("failed to get user info from session token: %s", err.Error()), http.StatusInternalServerError)
 			return
 		}
 		if tokenMap["perms"] != 1 {
@@ -300,7 +300,7 @@ func (app *api) Mount() http.Handler {
 		nodesList, err := getNodes(r.Context(), pool)
 		if err != nil {
 			log.Printf("failed to get nodes list: %s", err.Error())
-			http.Error(w, err.Error(), http.StatusInternalServerError)
+			http.Error(w, fmt.Sprintf("failed to get nodes list: %s", err.Error()), http.StatusInternalServerError)
 			return
 		}
 		// render admin page
@@ -312,7 +312,7 @@ func (app *api) Mount() http.Handler {
 		})
 		if err != nil {
 			log.Printf("failed to render template: %s", err.Error())
-			http.Error(w, err.Error(), http.StatusInternalServerError)
+			http.Error(w, fmt.Sprintf("failed to render template: %s", err.Error()), http.StatusInternalServerError)
 			return
 		}
 	})
@@ -333,41 +333,42 @@ func (app *api) Mount() http.Handler {
 		request, err := http.NewRequest("GET", fmt.Sprintf("http://%s:%s/ping", ip, port), nil)
 		if err != nil {
 			log.Printf("node did not respond: %s", err.Error())
-			http.Error(w, err.Error(), http.StatusInternalServerError)
+			http.Error(w, fmt.Sprintf("node did not respond: %s", err.Error()), http.StatusInternalServerError)
 			return
 		}
 		request.Header.Add("Authorization", "Bearer "+token)
 		do, err := http.DefaultClient.Do(request)
 		if err != nil {
 			log.Printf("node did not respond: %s", err.Error())
-			http.Error(w, err.Error(), http.StatusInternalServerError)
+			http.Error(w, fmt.Sprintf("node did not respond: %s", err.Error()), http.StatusInternalServerError)
 			return
 		}
 		defer do.Body.Close()
 		if do.StatusCode == http.StatusOK {
 			all, err := io.ReadAll(do.Body)
 			if err != nil {
-				log.Printf("node did not respond: %s", err.Error())
-				http.Error(w, err.Error(), http.StatusInternalServerError)
+				log.Printf("node did not respond")
+				http.Error(w, "server did not respond correctly", http.StatusInternalServerError)
 				return
 			}
 			if string(all) != "pong" {
-				log.Printf("node did not respond: %s", err.Error())
-				http.Error(w, err.Error(), http.StatusInternalServerError)
+				log.Printf("node did not respond")
+				http.Error(w, "server did not respond correctly", http.StatusInternalServerError)
 				return
 			}
 		} else {
 			log.Printf("node did not respond: %s", err.Error())
-			http.Error(w, err.Error(), http.StatusInternalServerError)
+			http.Error(w, "server did not respond correctly", http.StatusInternalServerError)
 			return
 		}
 		_, err = createNode(r.Context(), pool, name, ip, port, token, disk, ram)
 		if err != nil {
 			log.Printf("failed to create node in db: %s", err.Error())
-			http.Error(w, err.Error(), http.StatusInternalServerError)
+			http.Error(w, fmt.Sprintf("failed to create node in db: %s", err.Error()), http.StatusInternalServerError)
 			return
 		}
-		http.Redirect(w, r, "/admin", http.StatusSeeOther)
+		w.Header().Set("HX-Redirect", "/admin")
+		w.WriteHeader(http.StatusOK)
 	})
 	router.Post("/login", func(w http.ResponseWriter, r *http.Request) {
 		r.Body = http.MaxBytesReader(w, r.Body, 4096)

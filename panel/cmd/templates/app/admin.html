@@ -98,7 +98,7 @@
                         <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="close"></button>
                     </div>
                     <div class="modal-body">
-                        <form action="/addNode" method="POST">
+                        <form hx-post="/addNode" hx-swap="none" hx-target-error="#nodeErr">
                             <fieldset>
                                 <div class="mb-7 input-group">
                                     <span class="input-group-text">Name</span>
@@ -123,7 +123,8 @@
                                 </div>
                                 <hr/>
                                 <div class="d-grid gap-2">
-                                    <button type="submit" class="btn btn-primary mb-2" data-bs-dismiss="modal">Add Node</button>
+                                    <button type="submit" class="btn btn-primary mb-2">Add Node</button>
+                                    <div id="nodeErr" class="text text-danger"></div>
                                 </div>
                             </fieldset>
                         </form>
@@ -131,4 +132,16 @@
                 </div>
             </div>
         </div>
+
+        <script>
+            document.addEventListener('htmx:beforeSwap', function (evt) {
+                const errorTarget = evt.detail.requestConfig.elt.getAttribute("hx-target-error");
+                if (errorTarget && evt.detail.xhr.status >= 400) {
+                    evt.detail.shouldSwap = true;
+                    evt.detail.isError = false;
+                    evt.detail.target = document.querySelector(errorTarget);
+                    evt.detail.swapOverride = 'innerHTML';
+                }
+            });
+        </script>
 {{end}}
