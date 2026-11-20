@@ -241,7 +241,7 @@ func (app *api) Mount() http.Handler {
 		}
 	})
 	router.Get("/server", func(w http.ResponseWriter, r *http.Request) {
-		_, validSession, err := getSessionValidity(r.Context(), pool, r) // _ is userid
+		userId, validSession, err := getSessionValidity(r.Context(), pool, r) // _ is userid
 		if err != nil {
 			log.Printf("session validity check failed, error : %s", err.Error())
 			http.Error(w, err.Error(), http.StatusInternalServerError)
@@ -252,7 +252,7 @@ func (app *api) Mount() http.Handler {
 			return
 		}
 		serverId := r.URL.Query().Get("uuid")
-		server, err := getServer(r.Context(), pool, serverId)
+		server, err := getServer(r.Context(), pool, serverId, userId)
 		if err != nil {
 			log.Printf("failed to server from uuid: %s", err.Error())
 			http.Error(w, err.Error(), http.StatusInternalServerError)
@@ -316,9 +316,119 @@ func (app *api) Mount() http.Handler {
 			return
 		}
 	})
-	router.Post("/addNode", func(w http.ResponseWriter, r *http.Request) {
+	router.Get("/newServer", func(w http.ResponseWriter, r *http.Request) {
+		_, validSession, err := getSessionValidity(r.Context(), pool, r) // _ is userid
+		if err != nil {
+			log.Printf("session validity check failed, error : %s", err.Error())
+			http.Error(w, fmt.Sprintf("session validity check failed, error : %s", err.Error()), http.StatusInternalServerError)
+			return
+		}
+		if !validSession {
+			http.Redirect(w, r, "/login", http.StatusSeeOther)
+			return
+		}
+		tokenMap, err := getUserInfoFromSessionToken(r.Context(), pool, r)
+		if err != nil {
+			log.Printf("failed to get user info from session token: %s", err.Error())
+			http.Error(w, fmt.Sprintf("failed to get user info from session token: %s", err.Error()), http.StatusInternalServerError)
+			return
+		}
+		nodesList, err := getNodes(r.Context(), pool)
+		if err != nil {
+			log.Printf("failed to get nodes list: %s", err.Error())
+			http.Error(w, fmt.Sprintf("failed to get nodes list:: %s", err.Error()), http.StatusInternalServerError)
+			return
+		}
+		err = renderPage(w, "createServer.html", map[string]any{
+			"Title":    "New Server",
+			"Username": tokenMap["username"].(string),
+			"Perms":    tokenMap["perms"],
+			"nodes":    nodesList,
+		})
+		if err != nil {
+			log.Printf("failed to render template: %s", err.Error())
+			http.Error(w, fmt.Sprintf("failed to render template: %s", err.Error()), http.StatusInternalServerError)
+			return
+		}
+	})
+	router.Post("/newServer", func(w http.ResponseWriter, r *http.Request) {
+		userId, validSession, err := getSessionValidity(r.Context(), pool, r)
+		if err != nil {
+			log.Printf("session validity check failed, error : %s", err.Error())
+			http.Error(w, fmt.Sprintf("session validity check failed, error : %s", err.Error()), http.StatusInternalServerError)
+			return
+		}
+		if !validSession {
+			http.Redirect(w, r, "/login", http.StatusSeeOther)
+			return
+		}
 		r.Body = http.MaxBytesReader(w, r.Body, 4096)
-		err := r.ParseForm()
+		err = r.ParseForm()
+		if err != nil {
+			log.Printf("failed to parse form: %s", err.Error())
+			http.Error(w, "invalid request", http.StatusBadRequest)
+			return
+		}
+		name := r.PostForm.Get("name")
+		disk := r.PostForm.Get("disk")
+		ram := r.PostForm.Get("ram")
+		cpu := r.PostForm.Get("cpu")
+		game := r.PostForm.Get("game")
+		allowedImages := map[string]bool{
+			"itzg/minecraft-server:latest": true,
+		}
+		if !allowedImages[game] {
+			log.Printf("invalid game")
+			http.Error(w, "invalid game", http.StatusBadRequest)
+			return
+		}
+		node := r.PostForm.Get("node")
+		nodeInfo, err := getNode(r.Context(), pool, node)
+		if err != nil {
+			log.Printf("failed get node info: %s", err.Error())
+			http.Error(w, "failed get node info", http.StatusBadRequest)
+			return
+		}
+		serverId, err := createServer(r.Context(), pool, userId, nodeInfo.NodeName, servers{
+			NodeId:   nodeInfo.NodeId,
+			Name:     name,
+			Image:    game,
+			RamMb:    ram,
+			CpuLimit: cpu,
+			DiskMb:   disk,
+			Node:     *nodeInfo,
+		})
+		if err != nil {
+			log.Printf("failed create server: %s", err.Error())
+			http.Error(w, "failed create server", http.StatusBadRequest)
+			return
+		}
+		w.Header().Set("HX-Redirect", "/server?uuid="+serverId)
+		w.WriteHeader(http.StatusOK)
+	})
+	router.Post("/addNode", func(w http.ResponseWriter, r *http.Request) {
+		_, validSession, err := getSessionValidity(r.Context(), pool, r)
+		if err != nil {
+			log.Printf("session validity check failed, error : %s", err.Error())
+			http.Error(w, fmt.Sprintf("session validity check failed, error : %s", err.Error()), http.StatusInternalServerError)
+			return
+		}
+		if !validSession {
+			http.Redirect(w, r, "/login", http.StatusSeeOther)
+			return
+		}
+		tokenMap, err := getUserInfoFromSessionToken(r.Context(), pool, r)
+		if err != nil {
+			log.Printf("failed to get user info from session token: %s", err.Error())
+			http.Error(w, fmt.Sprintf("failed to get user info from session token: %s", err.Error()), http.StatusInternalServerError)
+			return
+		}
+		if tokenMap["perms"] != 1 {
+			http.Redirect(w, r, "/", http.StatusSeeOther)
+			return
+		}
+		r.Body = http.MaxBytesReader(w, r.Body, 4096)
+		err = r.ParseForm()
 		if err != nil {
 			log.Printf("failed to parse form: %s", err.Error())
 			http.Error(w, "invalid request", http.StatusBadRequest)
@@ -681,6 +791,19 @@ func getNodes(ctx context.Context, pool *pgxpool.Pool) ([]nodes, error) {
 	return nodesList, nil
 }
 
+func getNode(ctx context.Context, pool *pgxpool.Pool, nodeName string) (*nodes, error) {
+	query := `SELECT nodeId, name, ipaddr, port, total_disk_mb, total_ram_mb FROM nodes WHERE name = $1`
+	rows, err := pool.Query(ctx, query, nodeName)
+	if err != nil {
+		return nil, err
+	}
+	node, err := pgx.CollectOneRow(rows, pgx.RowToStructByName[nodes])
+	if err != nil {
+		return nil, err
+	}
+	return &node, nil
+}
+
 func initServersTable(ctx context.Context, pool *pgxpool.Pool) error {
 	query := `CREATE TABLE IF NOT EXISTS servers (
     serverId varchar(255) PRIMARY KEY,
@@ -713,7 +836,7 @@ func getUserServers(ctx context.Context, pool *pgxpool.Pool, userId string) ([]s
 		if err != nil {
 			return nil, err
 		}
-		nodesList, err := pgx.CollectRows(rows, pgx.RowToStructByName[nodes])
+		nodesList, err := pgx.CollectRows(rows, pgx.RowToStructByNameLax[nodes])
 		if err != nil {
 			return nil, err
 		}
@@ -734,10 +857,10 @@ func getUserServers(ctx context.Context, pool *pgxpool.Pool, userId string) ([]s
 	return newServersList, nil
 }
 
-func getServer(ctx context.Context, pool *pgxpool.Pool, serverId string) (servers, error) {
-	query := `SELECT nodeid, name, image, ram_mb, cpu_limit, disk_mb FROM servers WHERE serverid = $1`
+func getServer(ctx context.Context, pool *pgxpool.Pool, serverId, userId string) (servers, error) {
+	query := `SELECT nodeid, name, image, ram_mb, cpu_limit, disk_mb FROM servers WHERE serverid = $1 AND user_id = $2`
 	var currentServer servers
-	err := pool.QueryRow(ctx, query, serverId).Scan(
+	err := pool.QueryRow(ctx, query, serverId, userId).Scan(
 		&currentServer.NodeId,
 		&currentServer.Name,
 		&currentServer.Image,
@@ -749,6 +872,21 @@ func getServer(ctx context.Context, pool *pgxpool.Pool, serverId string) (server
 		return servers{}, err
 	}
 	return currentServer, nil
+}
+
+func createServer(ctx context.Context, pool *pgxpool.Pool, userId, nodeName string, sInfo servers) (string, error) {
+	serverId := uuid.New().String()
+	node, err := getNode(ctx, pool, nodeName)
+	if err != nil {
+		return "", err
+	}
+	query := `INSERT INTO servers (serverid, nodeid, name, image, ram_mb, disk_mb, cpu_limit, user_id) VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`
+
+	_, err = pool.Exec(ctx, query, serverId, node.NodeId, sInfo.Name, sInfo.Image, sInfo.RamMb, sInfo.DiskMb, sInfo.CpuLimit, userId)
+	if err != nil {
+		return "", err
+	}
+	return serverId, nil
 }
 
 func logout(ctx context.Context, pool *pgxpool.Pool, r *http.Request) error {

@@ -1,0 +1,62 @@
+{{define "content"}}
+    <div class="d-flex justify-content-center mt-2">
+        <h4 class="display-4 align-text-top mb-5">Create a new server</h4>
+    </div>
+    <div class="d-flex justify-content-center mt-6">
+        <div class="border border-3 rounded-4 p-5">
+            <form hx-post="/newServer" hx-swap="none" hx-target-error="#serverErr">
+                <fieldset>
+                    <!-- Select Node -->
+                    <div class="mb-4 input-group">
+                        <span class="input-group-text">Node</span>
+                        <select class="form-select" aria-label="Select a node" id="node" name="node">
+                            <option selected>Select a node</option>
+                            {{range .nodes}}
+                                <option value="{{.NodeName}}">{{.NodeName}}</option>
+                            {{end}}
+                        </select>
+                    </div>
+                    <!-- Select name, ram, cpu, disk -->
+                    <div class="mb-4 input-group">
+                        <span class="input-group-text">Server Name</span>
+                        <input class="form-control" name="name" placeholder="Name" maxlength="255" id="name" required/>
+                    </div>
+                    <div class="mb-4 input-group">
+                        <span class="input-group-text">Allocated disk and ram (MB)</span>
+                        <input class="form-control" name="ram" placeholder="RAM" maxlength="255" id="ram" required/>
+                        <span class="input-group-text">MB</span>
+                        <input class="form-control" name="disk" placeholder="DISK" maxlength="255" id="disk" required/>
+                        <span class="input-group-text">MB</span>
+                    </div>
+                    <div class="mb-4 input-group">
+                        <span class="input-group-text">Allocated CPU</span>
+                        <input class="form-control" name="cpu" placeholder="ex. 0.5;1;2" maxlength="255" id="cpu" required/>
+                    </div>
+                    <div class="mb-4 input-group">
+                        <span class="input-group-text">Game</span>
+                        <select class="form-select" aria-label="Select a game" id="game" name="game">
+                            <option selected value="" disabled>Select a game</option>
+                            <option value="itzg/minecraft-server:latest">Minecraft 26.3 Latest</option>
+                        </select>
+                    </div>
+                    <div class="d-grid">
+                        <button type="submit" class="btn btn-primary mb-1">Create Server</button>
+                        <div id="serverErr" class="text text-danger"></div>
+                    </div>
+                </fieldset>
+            </form>
+        </div>
+    </div>
+
+<script>
+    document.addEventListener('htmx:beforeSwap', function (evt) {
+        const errorTarget = evt.detail.requestConfig.elt.getAttribute("hx-target-error");
+        if (errorTarget && evt.detail.xhr.status >= 400) {
+            evt.detail.shouldSwap = true;
+            evt.detail.isError = false;
+            evt.detail.target = document.querySelector(errorTarget);
+            evt.detail.swapOverride = 'innerHTML';
+        }
+    });
+</script>
+{{end}}
