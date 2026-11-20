@@ -10,7 +10,7 @@
                     <div class="mb-4 input-group">
                         <span class="input-group-text">Node</span>
                         <select class="form-select" aria-label="Select a node" id="node" name="node">
-                            <option selected>Select a node</option>
+                            <option selected value="" disabled>Select a node</option>
                             {{range .nodes}}
                                 <option value="{{.NodeName}}">{{.NodeName}}</option>
                             {{end}}
