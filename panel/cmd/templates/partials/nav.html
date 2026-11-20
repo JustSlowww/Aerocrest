@@ -15,8 +15,8 @@
                     <ul class="dropdown-menu dropdown-menu-end">
                         <li><a class="dropdown-item">Profile</a></li>
                         <li><a class="dropdown-item">Settings</a></li>
-                        <li><hr class="dropdown-divider"/></li>
                         {{if eq .Perms 1 }}
+                            <li><hr class="dropdown-divider"/></li>
                             <li><a class="dropdown-item" href="/admin">Admin Settings</a></li>
                         {{end}}
                         <li><hr class="dropdown-divider"/></li>
