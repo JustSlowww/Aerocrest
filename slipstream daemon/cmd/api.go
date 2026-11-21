@@ -5,6 +5,7 @@ import (
 	"context"
 	"crypto/subtle"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log"
@@ -32,6 +33,11 @@ type config struct {
 	addr     string
 	wTimeout time.Duration
 	rTimeout time.Duration
+}
+
+type newServer struct {
+	Id   string
+	Port string
 }
 
 func BearerKeyAuth(secretKey string) func(next http.Handler) http.Handler {
@@ -91,7 +97,7 @@ func (app *api) Mount() http.Handler {
 				}
 				writer.Write(marshal)
 			})
-			r.Post("/", func(writer http.ResponseWriter, request *http.Request) {
+			r.Post("/minecraft", func(writer http.ResponseWriter, request *http.Request) {
 				image := request.URL.Query().Get("image")
 				containerName := request.URL.Query().Get("name")
 				mem, err := strconv.Atoi(request.URL.Query().Get("ram")) // in mb
@@ -143,17 +149,20 @@ func (app *api) Mount() http.Handler {
 					http.Error(writer, "ERROR: could not create container: "+err.Error(), http.StatusInternalServerError)
 					return
 				}
-				err = dockerCli.StartContainer(container.ID, nil)
-				if err != nil {
-					http.Error(writer, "ERROR: could not start container: "+err.Error(), http.StatusInternalServerError)
-					return
-				}
 				info, err := dockerCli.InspectContainerWithOptions(docker.InspectContainerOptions{ID: container.ID})
 				if err != nil {
 					http.Error(writer, err.Error(), http.StatusInternalServerError)
 					return
 				}
-				InfoMsg := fmt.Sprintf("Docker container has been created and is running \n ID: %s \n PORT: %s", container.ID, info.NetworkSettings.Ports["25565/tcp"][0].HostPort)
+				server := newServer{
+					Id:   container.ID,
+					Port: info.NetworkSettings.Ports["25565/tcp"][0].HostPort,
+				}
+				sInfo, err := json.MarshalIndent(server, "", "  ")
+				if err != nil {
+					http.Error(writer, err.Error(), http.StatusInternalServerError)
+					return
+				}
 				appDir := filepath.Join("/etc/slipstream/")
 				byteData, err := json.MarshalIndent(info.HostConfig, "", "  ")
 				if err != nil {
@@ -165,12 +174,36 @@ func (app *api) Mount() http.Handler {
 					http.Error(writer, err.Error(), http.StatusInternalServerError)
 					return
 				}
-
-				writer.Write([]byte(InfoMsg))
+				writer.Write(sInfo)
 			})
 			r.Route("/{uuid}", func(r chi.Router) {
 				r.Route("/power", func(r chi.Router) {
-					r.Get("/", func(writer http.ResponseWriter, request *http.Request) {
+					r.Get("/", func(w http.ResponseWriter, r *http.Request) {
+						containerId := chi.URLParam(r, "uuid")
+						options, err := dockerCli.InspectContainerWithOptions(docker.InspectContainerOptions{ID: containerId, Context: r.Context()})
+						if err != nil {
+							if errors.Is(err, &docker.NoSuchContainer{}) {
+								http.Error(w, "Server does not exist", http.StatusNotFound)
+							}
+							http.Error(w, err.Error(), http.StatusInternalServerError)
+							return
+						}
+						state := options.State
+						containerStatus := state.Status
+						running := state.Running
+						code := state.ExitCode
+
+						if !running && code == 0 && containerStatus == "exited" {
+							w.Write([]byte("{\"state\":0}"))
+						}
+						if running {
+							w.Write([]byte("{\"state\":2}"))
+						}
+						if !running && code != 0 {
+							w.Write([]byte("{\"state\":4}"))
+						}
+					})
+					r.Post("/", func(writer http.ResponseWriter, request *http.Request) {
 						instruction := request.URL.Query().Get("instruction")
 						containerId := chi.URLParam(request, "uuid")
 						switch instruction {

@@ -7,6 +7,7 @@ import (
 	"embed"
 	"encoding/base64"
 	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"html/template"
@@ -63,6 +64,7 @@ type nodes struct {
 	Port      string `db:"port"`
 	DiskTotal string `db:"total_disk_mb"`
 	RamTotal  string `db:"total_ram_mb"`
+	Token     string `db:"token"`
 }
 
 type servers struct {
@@ -74,6 +76,15 @@ type servers struct {
 	CpuLimit string `db:"cpu_limit"`
 	DiskMb   string `db:"disk_mb"`
 	Node     nodes  `db:"-"`
+}
+
+type newServer struct {
+	Id   string
+	Port string
+}
+
+type powerState struct {
+	State int `json:"state"`
 }
 
 func renderPage(w http.ResponseWriter, pageFile string, data any) error {
@@ -264,11 +275,38 @@ func (app *api) Mount() http.Handler {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return
 		}
+		nodeInfo, err := getNodeById(r.Context(), pool, server.NodeId)
+		if err != nil {
+			log.Printf("failed to get node info: %s", err.Error())
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		request, err := http.NewRequest("GET", "http://"+nodeInfo.IpAddress+":"+nodeInfo.Port+"/api/servers/"+serverId+"/power", nil)
+		if err != nil {
+			log.Printf("failed get server state: %s", err.Error())
+			http.Error(w, "failed get server state", http.StatusBadRequest)
+			return
+		}
+		request.Header.Set("Authorization", "Bearer "+nodeInfo.Token)
+		do, err := http.DefaultClient.Do(request)
+		if err != nil {
+			log.Printf("failed get server state: %s", err.Error())
+			http.Error(w, "failed get server state", http.StatusBadRequest)
+			return
+		}
+		var pwrJson powerState
+		err = json.NewDecoder(do.Body).Decode(&pwrJson)
+		if err != nil {
+			log.Printf("failed get server state: %s", err.Error())
+			http.Error(w, "failed get server state", http.StatusBadRequest)
+			return
+		}
 		err = renderPage(w, "serverInfo.html", map[string]any{
-			"Title":    server.Name,
-			"Username": tokenMap["username"].(string),
-			"Perms":    tokenMap["perms"],
-			"server":   server,
+			"Title":          server.Name,
+			"Username":       tokenMap["username"].(string),
+			"Perms":          tokenMap["perms"],
+			"server":         server,
+			"containerState": pwrJson.State,
 		})
 		if err != nil {
 			log.Printf("failed to render template: %s", err.Error())
@@ -389,7 +427,9 @@ func (app *api) Mount() http.Handler {
 			http.Error(w, "failed get node info", http.StatusBadRequest)
 			return
 		}
-		serverId, err := createServer(r.Context(), pool, userId, nodeInfo.NodeName, servers{
+		var serverI newServer
+		var servId string
+		servId, err = createServer(r.Context(), pool, userId, nodeInfo.NodeName, servers{
 			NodeId:   nodeInfo.NodeId,
 			Name:     name,
 			Image:    game,
@@ -397,13 +437,44 @@ func (app *api) Mount() http.Handler {
 			CpuLimit: cpu,
 			DiskMb:   disk,
 			Node:     *nodeInfo,
+			ServerId: serverI.Id,
 		})
 		if err != nil {
 			log.Printf("failed create server: %s", err.Error())
 			http.Error(w, "failed create server", http.StatusBadRequest)
 			return
 		}
-		w.Header().Set("HX-Redirect", "/server?uuid="+serverId)
+		if strings.Contains(game, "itzg/minecraft-server") {
+			var q url.Values
+			q.Add("image", game)
+			q.Add("name", name)
+			q.Add("ram", ram)
+			q.Add("cpu", cpu)
+			q.Add("version", "26.3")
+			q.Add("ssd", disk+"M")
+			request, err := http.NewRequest("POST", "http://"+nodeInfo.IpAddress+":"+nodeInfo.Port+"/api/servers/minecraft"+q.Encode(), nil)
+			if err != nil {
+				log.Printf("failed create server: %s", err.Error())
+				http.Error(w, "failed create server", http.StatusBadRequest)
+				return
+			}
+			request.Header.Set("Authorization", "Bearer "+nodeInfo.Token)
+			doReq, err := http.DefaultClient.Do(request)
+			if err != nil {
+				log.Printf("failed create server: %s", err.Error())
+				http.Error(w, "failed create server", http.StatusBadRequest)
+				return
+			}
+			if doReq.StatusCode == http.StatusOK {
+				err = json.NewDecoder(doReq.Body).Decode(&serverI)
+				if err != nil {
+					log.Printf("failed create server: %s", err.Error())
+					http.Error(w, "failed create server", http.StatusBadRequest)
+					return
+				}
+			}
+		}
+		w.Header().Set("HX-Redirect", "/server?uuid="+servId)
 		w.WriteHeader(http.StatusOK)
 	})
 	router.Post("/addNode", func(w http.ResponseWriter, r *http.Request) {
@@ -784,7 +855,7 @@ func getNodes(ctx context.Context, pool *pgxpool.Pool) ([]nodes, error) {
 	if err != nil {
 		return nil, err
 	}
-	nodesList, err := pgx.CollectRows(rows, pgx.RowToStructByName[nodes])
+	nodesList, err := pgx.CollectRows(rows, pgx.RowToStructByNameLax[nodes])
 	if err != nil {
 		return nil, err
 	}
@@ -792,12 +863,25 @@ func getNodes(ctx context.Context, pool *pgxpool.Pool) ([]nodes, error) {
 }
 
 func getNode(ctx context.Context, pool *pgxpool.Pool, nodeName string) (*nodes, error) {
-	query := `SELECT nodeId, name, ipaddr, port, total_disk_mb, total_ram_mb FROM nodes WHERE name = $1`
+	query := `SELECT nodeId, name, ipaddr, port, total_disk_mb, total_ram_mb, token FROM nodes WHERE name = $1`
 	rows, err := pool.Query(ctx, query, nodeName)
 	if err != nil {
 		return nil, err
 	}
-	node, err := pgx.CollectOneRow(rows, pgx.RowToStructByName[nodes])
+	node, err := pgx.CollectOneRow(rows, pgx.RowToStructByNameLax[nodes])
+	if err != nil {
+		return nil, err
+	}
+	return &node, nil
+}
+
+func getNodeById(ctx context.Context, pool *pgxpool.Pool, nodeId string) (*nodes, error) {
+	query := `SELECT nodeId, name, ipaddr, port, total_disk_mb, total_ram_mb, token FROM nodes WHERE nodeId = $1`
+	rows, err := pool.Query(ctx, query, nodeId)
+	if err != nil {
+		return nil, err
+	}
+	node, err := pgx.CollectOneRow(rows, pgx.RowToStructByNameLax[nodes])
 	if err != nil {
 		return nil, err
 	}
