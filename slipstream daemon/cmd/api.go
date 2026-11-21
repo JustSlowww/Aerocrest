@@ -99,7 +99,6 @@ func (app *api) Mount() http.Handler {
 			})
 			r.Post("/minecraft", func(writer http.ResponseWriter, request *http.Request) {
 				image := request.URL.Query().Get("image")
-				containerName := request.URL.Query().Get("name")
 				mem, err := strconv.Atoi(request.URL.Query().Get("ram")) // in mb
 				ssd := request.URL.Query().Get("ssd")                    // format ex 500M
 				mcVer := request.URL.Query().Get("version")
@@ -125,7 +124,6 @@ func (app *api) Mount() http.Handler {
 					return
 				}
 				container, err := dockerCli.CreateContainer(docker.CreateContainerOptions{
-					Name: containerName,
 					Config: &docker.Config{
 						Image:        image,
 						Env:          []string{"EULA=TRUE", "VERSION=" + mcVer, fmt.Sprintf("MEMORY=%dM", mem-256)},
@@ -149,6 +147,11 @@ func (app *api) Mount() http.Handler {
 					http.Error(writer, "ERROR: could not create container: "+err.Error(), http.StatusInternalServerError)
 					return
 				}
+				err = dockerCli.StartContainer(container.ID, nil)
+				if err != nil {
+					http.Error(writer, "ERROR: could not start container: "+err.Error(), http.StatusInternalServerError)
+					return
+				}
 				info, err := dockerCli.InspectContainerWithOptions(docker.InspectContainerOptions{ID: container.ID})
 				if err != nil {
 					http.Error(writer, err.Error(), http.StatusInternalServerError)
@@ -170,6 +173,11 @@ func (app *api) Mount() http.Handler {
 					return
 				}
 				err = os.WriteFile(filepath.Join(appDir, info.ID+".json"), byteData, 0600)
+				if err != nil {
+					http.Error(writer, err.Error(), http.StatusInternalServerError)
+					return
+				}
+				err = dockerCli.StopContainer(container.ID, 60)
 				if err != nil {
 					http.Error(writer, err.Error(), http.StatusInternalServerError)
 					return

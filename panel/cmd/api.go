@@ -281,7 +281,7 @@ func (app *api) Mount() http.Handler {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return
 		}
-		request, err := http.NewRequest("GET", "http://"+nodeInfo.IpAddress+":"+nodeInfo.Port+"/api/servers/"+serverId+"/power", nil)
+		request, err := http.NewRequest("GET", "http://"+nodeInfo.IpAddress+":"+nodeInfo.Port+"/api/servers/"+server.ServerId+"/power", nil)
 		if err != nil {
 			log.Printf("failed get server state: %s", err.Error())
 			http.Error(w, "failed get server state", http.StatusBadRequest)
@@ -429,30 +429,19 @@ func (app *api) Mount() http.Handler {
 		}
 		var serverI newServer
 		var servId string
-		servId, err = createServer(r.Context(), pool, userId, nodeInfo.NodeName, servers{
-			NodeId:   nodeInfo.NodeId,
-			Name:     name,
-			Image:    game,
-			RamMb:    ram,
-			CpuLimit: cpu,
-			DiskMb:   disk,
-			Node:     *nodeInfo,
-			ServerId: serverI.Id,
-		})
 		if err != nil {
 			log.Printf("failed create server: %s", err.Error())
 			http.Error(w, "failed create server", http.StatusBadRequest)
 			return
 		}
 		if strings.Contains(game, "itzg/minecraft-server") {
-			var q url.Values
+			q := url.Values{}
 			q.Add("image", game)
-			q.Add("name", name)
 			q.Add("ram", ram)
 			q.Add("cpu", cpu)
 			q.Add("version", "26.3")
 			q.Add("ssd", disk+"M")
-			request, err := http.NewRequest("POST", "http://"+nodeInfo.IpAddress+":"+nodeInfo.Port+"/api/servers/minecraft"+q.Encode(), nil)
+			request, err := http.NewRequest("POST", "http://"+nodeInfo.IpAddress+":"+nodeInfo.Port+"/api/servers/minecraft?"+q.Encode(), nil)
 			if err != nil {
 				log.Printf("failed create server: %s", err.Error())
 				http.Error(w, "failed create server", http.StatusBadRequest)
@@ -472,6 +461,16 @@ func (app *api) Mount() http.Handler {
 					http.Error(w, "failed create server", http.StatusBadRequest)
 					return
 				}
+				servId, err = createServer(r.Context(), pool, userId, nodeInfo.NodeName, servers{
+					NodeId:   nodeInfo.NodeId,
+					Name:     name,
+					Image:    game,
+					RamMb:    ram,
+					CpuLimit: cpu,
+					DiskMb:   disk,
+					Node:     *nodeInfo,
+					ServerId: serverI.Id,
+				})
 			}
 		}
 		w.Header().Set("HX-Redirect", "/server?uuid="+servId)
@@ -942,7 +941,7 @@ func getUserServers(ctx context.Context, pool *pgxpool.Pool, userId string) ([]s
 }
 
 func getServer(ctx context.Context, pool *pgxpool.Pool, serverId, userId string) (servers, error) {
-	query := `SELECT nodeid, name, image, ram_mb, cpu_limit, disk_mb FROM servers WHERE serverid = $1 AND user_id = $2`
+	query := `SELECT nodeid, name, image, ram_mb, cpu_limit, disk_mb, serverid FROM servers WHERE serverid = $1 AND user_id = $2`
 	var currentServer servers
 	err := pool.QueryRow(ctx, query, serverId, userId).Scan(
 		&currentServer.NodeId,
@@ -951,6 +950,7 @@ func getServer(ctx context.Context, pool *pgxpool.Pool, serverId, userId string)
 		&currentServer.RamMb,
 		&currentServer.CpuLimit,
 		&currentServer.DiskMb,
+		&currentServer.ServerId,
 	)
 	if err != nil {
 		return servers{}, err
@@ -959,18 +959,17 @@ func getServer(ctx context.Context, pool *pgxpool.Pool, serverId, userId string)
 }
 
 func createServer(ctx context.Context, pool *pgxpool.Pool, userId, nodeName string, sInfo servers) (string, error) {
-	serverId := uuid.New().String()
 	node, err := getNode(ctx, pool, nodeName)
 	if err != nil {
 		return "", err
 	}
 	query := `INSERT INTO servers (serverid, nodeid, name, image, ram_mb, disk_mb, cpu_limit, user_id) VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`
 
-	_, err = pool.Exec(ctx, query, serverId, node.NodeId, sInfo.Name, sInfo.Image, sInfo.RamMb, sInfo.DiskMb, sInfo.CpuLimit, userId)
+	_, err = pool.Exec(ctx, query, sInfo.ServerId, node.NodeId, sInfo.Name, sInfo.Image, sInfo.RamMb, sInfo.DiskMb, sInfo.CpuLimit, userId)
 	if err != nil {
 		return "", err
 	}
-	return serverId, nil
+	return sInfo.ServerId, nil
 }
 
 func logout(ctx context.Context, pool *pgxpool.Pool, r *http.Request) error {
