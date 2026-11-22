@@ -90,7 +90,7 @@ type powerState struct {
 func renderPage(w http.ResponseWriter, pageFile string, data any) error {
 	tmpl := template.Must(template.ParseFS(templateFS,
 		"templates/app/base.html",
-		"templates/partials/nav.html",
+		"templates/partials/*.html",
 		"templates/app/"+pageFile,
 	))
 	return tmpl.ExecuteTemplate(w, "base", data)
@@ -103,7 +103,7 @@ func (app *api) Mount() http.Handler {
 	router.Use(middleware.Logger)
 	router.Use(middleware.Recoverer)
 	router.Use(middleware.Timeout(90 * time.Second))
-	router.Use(httprate.LimitBy(45, time.Minute, func(r *http.Request) (string, error) {
+	router.Use(httprate.LimitBy(60, time.Minute, func(r *http.Request) (string, error) {
 		return httprate.CanonicalizeIP(middleware.GetClientIP(r.Context())), nil
 	}))
 	dbUrl := fmt.Sprintf("postgres://postgres:%s@127.0.0.1:%s/%s?sslmode=disable", url.QueryEscape(app.dbConfig.dbPass), app.dbConfig.dbPort, app.dbConfig.dbName)
@@ -251,69 +251,119 @@ func (app *api) Mount() http.Handler {
 			return
 		}
 	})
-	router.Get("/server", func(w http.ResponseWriter, r *http.Request) {
-		userId, validSession, err := getSessionValidity(r.Context(), pool, r) // _ is userid
-		if err != nil {
-			log.Printf("session validity check failed, error : %s", err.Error())
-			http.Error(w, err.Error(), http.StatusInternalServerError)
-			return
-		}
-		if !validSession {
-			http.Redirect(w, r, "/login", http.StatusSeeOther)
-			return
-		}
-		serverId := r.URL.Query().Get("uuid")
-		server, err := getServer(r.Context(), pool, serverId, userId)
-		if err != nil {
-			log.Printf("failed to server from uuid: %s", err.Error())
-			http.Error(w, err.Error(), http.StatusInternalServerError)
-			return
-		}
-		tokenMap, err := getUserInfoFromSessionToken(r.Context(), pool, r)
-		if err != nil {
-			log.Printf("failed to get user info from session token: %s", err.Error())
-			http.Error(w, err.Error(), http.StatusInternalServerError)
-			return
-		}
-		nodeInfo, err := getNodeById(r.Context(), pool, server.NodeId)
-		if err != nil {
-			log.Printf("failed to get node info: %s", err.Error())
-			http.Error(w, err.Error(), http.StatusInternalServerError)
-			return
-		}
-		request, err := http.NewRequest("GET", "http://"+nodeInfo.IpAddress+":"+nodeInfo.Port+"/api/servers/"+server.ServerId+"/power", nil)
-		if err != nil {
-			log.Printf("failed get server state: %s", err.Error())
-			http.Error(w, "failed get server state", http.StatusBadRequest)
-			return
-		}
-		request.Header.Set("Authorization", "Bearer "+nodeInfo.Token)
-		do, err := http.DefaultClient.Do(request)
-		if err != nil {
-			log.Printf("failed get server state: %s", err.Error())
-			http.Error(w, "failed get server state", http.StatusBadRequest)
-			return
-		}
-		var pwrJson powerState
-		err = json.NewDecoder(do.Body).Decode(&pwrJson)
-		if err != nil {
-			log.Printf("failed get server state: %s", err.Error())
-			http.Error(w, "failed get server state", http.StatusBadRequest)
-			return
-		}
-		err = renderPage(w, "serverInfo.html", map[string]any{
-			"Title":          server.Name,
-			"Username":       tokenMap["username"].(string),
-			"Perms":          tokenMap["perms"],
-			"server":         server,
-			"containerState": pwrJson.State,
+	router.Route("/server", func(r chi.Router) {
+		r.Get("/", func(w http.ResponseWriter, r *http.Request) {
+			userId, validSession, err := getSessionValidity(r.Context(), pool, r) // _ is userid
+			if err != nil {
+				log.Printf("session validity check failed, error : %s", err.Error())
+				http.Error(w, err.Error(), http.StatusInternalServerError)
+				return
+			}
+			if !validSession {
+				http.Redirect(w, r, "/login", http.StatusSeeOther)
+				return
+			}
+			serverId := r.URL.Query().Get("uuid")
+			server, err := getServer(r.Context(), pool, serverId, userId)
+			if err != nil {
+				log.Printf("failed to server from uuid: %s", err.Error())
+				http.Error(w, err.Error(), http.StatusInternalServerError)
+				return
+			}
+			tokenMap, err := getUserInfoFromSessionToken(r.Context(), pool, r)
+			if err != nil {
+				log.Printf("failed to get user info from session token: %s", err.Error())
+				http.Error(w, err.Error(), http.StatusInternalServerError)
+				return
+			}
+			nodeInfo, err := getNodeById(r.Context(), pool, server.NodeId)
+			if err != nil {
+				log.Printf("failed to get node info: %s", err.Error())
+				http.Error(w, err.Error(), http.StatusInternalServerError)
+				return
+			}
+			request, err := http.NewRequest("GET", "http://"+nodeInfo.IpAddress+":"+nodeInfo.Port+"/api/servers/"+server.ServerId+"/power", nil)
+			if err != nil {
+				log.Printf("failed get server state: %s", err.Error())
+				http.Error(w, "failed get server state", http.StatusBadRequest)
+				return
+			}
+			request.Header.Set("Authorization", "Bearer "+nodeInfo.Token)
+			do, err := http.DefaultClient.Do(request)
+			if err != nil {
+				log.Printf("failed get server state: %s", err.Error())
+				http.Error(w, "failed get server state", http.StatusBadRequest)
+				return
+			}
+			var pwrJson powerState
+			err = json.NewDecoder(do.Body).Decode(&pwrJson)
+			if err != nil {
+				log.Printf("failed get server state: %s", err.Error())
+				http.Error(w, "failed get server state", http.StatusBadRequest)
+				return
+			}
+			defer do.Body.Close()
+			err = renderPage(w, "serverInfo.html", map[string]any{
+				"Title":          server.Name,
+				"Username":       tokenMap["username"].(string),
+				"Perms":          tokenMap["perms"],
+				"server":         server,
+				"containerState": pwrJson.State,
+			})
+			if err != nil {
+				log.Printf("failed to render template: %s", err.Error())
+				http.Error(w, err.Error(), http.StatusInternalServerError)
+				return
+			}
 		})
-		if err != nil {
-			log.Printf("failed to render template: %s", err.Error())
-			http.Error(w, err.Error(), http.StatusInternalServerError)
-			return
-		}
+		r.Post("/pwr", func(w http.ResponseWriter, r *http.Request) {
+			userId, validSession, err := getSessionValidity(r.Context(), pool, r) // _ is userid
+			if err != nil {
+				log.Printf("session validity check failed, error : %s", err.Error())
+				http.Error(w, err.Error(), http.StatusInternalServerError)
+				return
+			}
+			if !validSession {
+				http.Redirect(w, r, "/login", http.StatusSeeOther)
+				return
+			}
+			serverId := r.URL.Query().Get("uuid")
+			instruction := r.URL.Query().Get("instruction")
+			server, err := getServer(r.Context(), pool, serverId, userId)
+			if err != nil {
+				log.Printf("failed to server from uuid: %s", err.Error())
+				http.Error(w, err.Error(), http.StatusInternalServerError)
+				return
+			}
+			nodeInfo, err := getNodeById(r.Context(), pool, server.NodeId)
+			if err != nil {
+				log.Printf("failed to get node info: %s", err.Error())
+				http.Error(w, err.Error(), http.StatusInternalServerError)
+				return
+			}
+			q := url.Values{}
+			q.Add("instruction", instruction)
+			request, err := http.NewRequest("POST", "http://"+nodeInfo.IpAddress+":"+nodeInfo.Port+"/api/servers/"+server.ServerId+"/power?"+q.Encode(), nil)
+			if err != nil {
+				log.Printf("failed get server state: %s", err.Error())
+				http.Error(w, "failed get server state", http.StatusBadRequest)
+				return
+			}
+			request.Header.Set("Authorization", "Bearer "+nodeInfo.Token)
+			do, err := http.DefaultClient.Do(request)
+			if err != nil {
+				log.Printf("failed get server state: %s", err.Error())
+				http.Error(w, "failed get server state", http.StatusBadRequest)
+				return
+			}
+			defer do.Body.Close()
+			if do.StatusCode == http.StatusOK {
+				w.Header().Set("HX-Redirect", "/server?uuid="+server.ServerId)
+				w.WriteHeader(http.StatusOK)
+			}
+		})
 	})
+
 	router.Get("/admin", func(w http.ResponseWriter, r *http.Request) {
 		_, validSession, err := getSessionValidity(r.Context(), pool, r) // _ is userid
 		if err != nil {
@@ -471,6 +521,7 @@ func (app *api) Mount() http.Handler {
 					Node:     *nodeInfo,
 					ServerId: serverI.Id,
 				})
+				defer doReq.Body.Close()
 			}
 		}
 		w.Header().Set("HX-Redirect", "/server?uuid="+servId)

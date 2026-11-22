@@ -192,6 +192,7 @@ func (app *api) Mount() http.Handler {
 						if err != nil {
 							if errors.Is(err, &docker.NoSuchContainer{}) {
 								http.Error(w, "Server does not exist", http.StatusNotFound)
+								return
 							}
 							http.Error(w, err.Error(), http.StatusInternalServerError)
 							return
@@ -200,15 +201,21 @@ func (app *api) Mount() http.Handler {
 						containerStatus := state.Status
 						running := state.Running
 						code := state.ExitCode
-
+						if state.Health.Status == "starting" {
+							w.Write([]byte("{\"state\":1}"))
+							return
+						}
 						if !running && code == 0 && containerStatus == "exited" {
 							w.Write([]byte("{\"state\":0}"))
+							return
 						}
 						if running {
 							w.Write([]byte("{\"state\":2}"))
+							return
 						}
 						if !running && code != 0 {
 							w.Write([]byte("{\"state\":4}"))
+							return
 						}
 					})
 					r.Post("/", func(writer http.ResponseWriter, request *http.Request) {
