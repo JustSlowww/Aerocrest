@@ -28,8 +28,17 @@ func main() {
 	var frame *t.Frame
 	pages := t.NewPages()
 	var form *t.Form
-	var DockerModal *t.Modal
+	var DockerModal, errModal *t.Modal
 	var Port string
+	errModal = t.NewModal().AddButtons([]string{"Okay"}).SetDoneFunc(func(buttonIndex int, buttonLabel string) {
+		if buttonLabel == "Okay" {
+			app.Stop()
+		}
+	})
+	showErr := func(msg string) {
+		errModal.SetText(msg)
+		pages.SwitchToPage("errModal")
+	}
 	quitModal := t.NewModal().SetText("Are you sure you want to quit the slipstream setup?").AddButtons([]string{"yes", "no"}).SetDoneFunc(func(buttonIndex int, buttonLabel string) {
 		if buttonLabel == "yes" {
 			app.Stop()
@@ -44,43 +53,20 @@ func main() {
 	})
 	DockerModal = t.NewModal().SetText("Now, Lets install docker ( its purpose is to create and manage the servers on this node.) This Could Take a bit").AddButtons([]string{"Install Docker"}).SetDoneFunc(func(buttonIndex int, buttonLabel string) {
 		if buttonLabel == "Install Docker" {
-			DockerModal.SetText("Installing Docker...")
-			err := os.MkdirAll("/etc/slipstream", 0755)
+			_, err := apt.CheckForUpdates()
 			if err != nil {
-				fmt.Println("Failed to create slipstream directory")
-				return
-			}
-			cfg, err := ini.LooseLoad(cfgPath)
-			if err != nil {
-				fmt.Println("Failed to load slipstream cfg")
-				return
-			}
-			cfg.Section("").Key("port").SetValue(Port)
-			cfg.Section("").Key("isFirstRun").SetValue("true")
-			err = cfg.SaveTo(cfgPath)
-			if err != nil {
-				fmt.Println("Failed to save slipstream cfg")
-				return
-			}
-			err = os.Chmod(cfgPath, 0660)
-			if err != nil {
-				fmt.Println("Failed to set perms for slipstream cfg")
-				return
-			}
-			_, err = apt.CheckForUpdates()
-			if err != nil {
-				fmt.Println("Failed to install docker")
+				showErr("Failed to install docker")
 				return
 			}
 			_, err = apt.Install(&apt.Package{Name: "docker.io"}, &apt.Package{Name: "docker-compose-v2"})
 			if err != nil {
-				fmt.Println("Failed to install docker")
+				showErr("Failed to install docker")
 				return
 			}
 			cmd := exec.Command("systemctl", "enable", "--now", "docker")
 			err = cmd.Run()
 			if err != nil {
-				fmt.Println("Failed to start docker")
+				showErr("Failed to start docker")
 				return
 			}
 			pages.SwitchToPage("finished")
@@ -88,13 +74,35 @@ func main() {
 	})
 	form = t.NewForm().
 		AddInputField("Slipstream Service Port", "", 6, nil, nil).
-		AddButton("quit", func() {
-			pages.SwitchToPage("modal")
-		}).
-		AddButton("Finish Setup", func() {
+		AddButton("Continue", func() {
 			Port = (form.GetFormItemByLabel("Slipstream Service Port")).(*t.InputField).GetText()
+			err := os.MkdirAll("/etc/slipstream", 0755)
+			if err != nil {
+				showErr("Failed to create slipstream directory")
+				return
+			}
+			cfg, err := ini.LooseLoad(cfgPath)
+			if err != nil {
+				showErr("Failed to load slipstream cfg")
+				return
+			}
+			cfg.Section("").Key("port").SetValue(Port)
+			cfg.Section("").Key("isFirstRun").SetValue("true")
+			err = cfg.SaveTo(cfgPath)
+			if err != nil {
+				showErr("Failed to save slipstream cfg")
+				return
+			}
+			err = os.Chmod(cfgPath, 0660)
+			if err != nil {
+				showErr("Failed to set perms for slipstream cfg")
+				return
+			}
 			pages.SwitchToPage("dockerInstall")
 
+		}).
+		AddButton("Quit", func() {
+			pages.SwitchToPage("modal")
 		})
 	form.SetBorder(true).SetTitle("Slipstream Installation Wizard")
 	frame = t.NewFrame(form).AddText("Navigate using the tab key", true, t.AlignCenter, tcell.ColorWhite)
@@ -103,6 +111,7 @@ func main() {
 	pages.AddPage("modal", quitModal, true, false)
 	pages.AddPage("finished", finishedModal, true, false)
 	pages.AddPage("dockerInstall", DockerModal, true, false)
+	pages.AddPage("errModal", errModal, true, false)
 	err := app.SetRoot(pages, true).Run()
 	if err != nil {
 		panic(err)
