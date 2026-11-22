@@ -439,93 +439,106 @@ func (app *api) Mount() http.Handler {
 			return
 		}
 	})
-	router.Post("/newServer", func(w http.ResponseWriter, r *http.Request) {
-		userId, validSession, err := getSessionValidity(r.Context(), pool, r)
-		if err != nil {
-			log.Printf("session validity check failed, error : %s", err.Error())
-			http.Error(w, fmt.Sprintf("session validity check failed, error : %s", err.Error()), http.StatusInternalServerError)
-			return
-		}
-		if !validSession {
-			http.Redirect(w, r, "/login", http.StatusSeeOther)
-			return
-		}
-		r.Body = http.MaxBytesReader(w, r.Body, 4096)
-		err = r.ParseForm()
-		if err != nil {
-			log.Printf("failed to parse form: %s", err.Error())
-			http.Error(w, "invalid request", http.StatusBadRequest)
-			return
-		}
-		name := r.PostForm.Get("name")
-		disk := r.PostForm.Get("disk")
-		ram := r.PostForm.Get("ram")
-		cpu := r.PostForm.Get("cpu")
-		game := r.PostForm.Get("game")
-		allowedImages := map[string]bool{
-			"itzg/minecraft-server:latest": true,
-		}
-		if !allowedImages[game] {
-			log.Printf("invalid game")
-			http.Error(w, "invalid game", http.StatusBadRequest)
-			return
-		}
-		node := r.PostForm.Get("node")
-		nodeInfo, err := getNode(r.Context(), pool, node)
-		if err != nil {
-			log.Printf("failed get node info: %s", err.Error())
-			http.Error(w, "failed get node info", http.StatusBadRequest)
-			return
-		}
-		var serverI newServer
-		var servId string
-		if err != nil {
-			log.Printf("failed create server: %s", err.Error())
-			http.Error(w, "failed create server", http.StatusBadRequest)
-			return
-		}
-		if strings.Contains(game, "itzg/minecraft-server") {
-			q := url.Values{}
-			q.Add("image", game)
-			q.Add("ram", ram)
-			q.Add("cpu", cpu)
-			q.Add("version", "26.3")
-			q.Add("ssd", disk+"M")
-			request, err := http.NewRequest("POST", "http://"+nodeInfo.IpAddress+":"+nodeInfo.Port+"/api/servers/minecraft?"+q.Encode(), nil)
+	router.Group(func(r chi.Router) {
+		r.Use(middleware.Timeout(240 * time.Second))
+		r.Post("/newServer", func(w http.ResponseWriter, r *http.Request) {
+			userId, validSession, err := getSessionValidity(r.Context(), pool, r)
 			if err != nil {
-				log.Printf("failed create server: %s", err.Error())
-				http.Error(w, "failed create server", http.StatusBadRequest)
+				log.Printf("session validity check failed, error : %s", err.Error())
+				http.Error(w, fmt.Sprintf("session validity check failed, error : %s", err.Error()), http.StatusInternalServerError)
 				return
 			}
-			request.Header.Set("Authorization", "Bearer "+nodeInfo.Token)
-			doReq, err := http.DefaultClient.Do(request)
-			if err != nil {
-				log.Printf("failed create server: %s", err.Error())
-				http.Error(w, "failed create server", http.StatusBadRequest)
+			if !validSession {
+				w.Header().Set("HX-Redirect", "/login")
+				w.WriteHeader(http.StatusOK)
 				return
 			}
-			if doReq.StatusCode == http.StatusOK {
-				err = json.NewDecoder(doReq.Body).Decode(&serverI)
+			r.Body = http.MaxBytesReader(w, r.Body, 4096)
+			err = r.ParseForm()
+			if err != nil {
+				log.Printf("failed to parse form: %s", err.Error())
+				http.Error(w, "invalid request", http.StatusBadRequest)
+				return
+			}
+			name := r.PostForm.Get("name")
+			disk := r.PostForm.Get("disk")
+			ram := r.PostForm.Get("ram")
+			cpu := r.PostForm.Get("cpu")
+			game := r.PostForm.Get("game")
+			allowedImages := map[string]bool{
+				"itzg/minecraft-server:latest": true,
+			}
+			if !allowedImages[game] {
+				log.Printf("invalid game")
+				http.Error(w, "invalid game", http.StatusBadRequest)
+				return
+			}
+			node := r.PostForm.Get("node")
+			nodeInfo, err := getNode(r.Context(), pool, node)
+			if err != nil {
+				log.Printf("failed get node info: %s", err.Error())
+				http.Error(w, "failed get node info", http.StatusBadRequest)
+				return
+			}
+			var serverI newServer
+			var servId string
+			if strings.Contains(game, "itzg/minecraft-server") {
+				q := url.Values{}
+				q.Add("image", game)
+				q.Add("ram", ram)
+				q.Add("cpu", cpu)
+				q.Add("version", "26.3")
+				q.Add("ssd", disk+"M")
+				request, err := http.NewRequest("POST", "http://"+nodeInfo.IpAddress+":"+nodeInfo.Port+"/api/servers/minecraft?"+q.Encode(), nil)
 				if err != nil {
 					log.Printf("failed create server: %s", err.Error())
 					http.Error(w, "failed create server", http.StatusBadRequest)
 					return
 				}
-				servId, err = createServer(r.Context(), pool, userId, nodeInfo.NodeName, servers{
-					NodeId:   nodeInfo.NodeId,
-					Name:     name,
-					Image:    game,
-					RamMb:    ram,
-					CpuLimit: cpu,
-					DiskMb:   disk,
-					Node:     *nodeInfo,
-					ServerId: serverI.Id,
-				})
+				request.Header.Set("Authorization", "Bearer "+nodeInfo.Token)
+				doReq, err := http.DefaultClient.Do(request)
+				if err != nil {
+					log.Printf("failed create server: %s", err.Error())
+					http.Error(w, "failed create server", http.StatusBadRequest)
+					return
+				}
 				defer doReq.Body.Close()
+				if doReq.StatusCode == http.StatusOK {
+					err = json.NewDecoder(doReq.Body).Decode(&serverI)
+					if err != nil {
+						log.Printf("failed create server: %s", err.Error())
+						http.Error(w, "failed create server", http.StatusBadRequest)
+						return
+					}
+					servId, err = createServer(r.Context(), pool, userId, nodeInfo.NodeName, servers{
+						NodeId:   nodeInfo.NodeId,
+						Name:     name,
+						Image:    game,
+						RamMb:    ram,
+						CpuLimit: cpu,
+						DiskMb:   disk,
+						Node:     *nodeInfo,
+						ServerId: serverI.Id,
+					})
+					if err != nil {
+						log.Printf("failed create server: %s", err.Error())
+						http.Error(w, "failed create server", http.StatusBadRequest)
+						return
+					}
+				} else {
+					log.Printf("failed create server: %v", doReq.StatusCode)
+					http.Error(w, "failed create server", http.StatusInternalServerError)
+					return
+				}
 			}
-		}
-		w.Header().Set("HX-Redirect", "/server?uuid="+servId)
-		w.WriteHeader(http.StatusOK)
+			if strings.TrimSpace(servId) == "" {
+				log.Print("failed create server: empty server id")
+				http.Error(w, "failed create server", http.StatusInternalServerError)
+				return
+			}
+			w.Header().Set("HX-Redirect", "/server?uuid="+url.QueryEscape(servId))
+			w.WriteHeader(http.StatusOK)
+		})
 	})
 	router.Post("/addNode", func(w http.ResponseWriter, r *http.Request) {
 		_, validSession, err := getSessionValidity(r.Context(), pool, r)
