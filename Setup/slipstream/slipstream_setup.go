@@ -104,8 +104,8 @@ func main() {
 		AddButton("Quit", func() {
 			pages.SwitchToPage("modal")
 		})
-	form.SetBorder(true).SetTitle("Slipstream Installation Wizard")
-	frame = t.NewFrame(form).AddText("Navigate using the tab key", true, t.AlignCenter, tcell.ColorWhite)
+	form.SetBorder(true).SetTitle("Slipstream Installation Wizard").SetTitleAlign(t.AlignLeft)
+	frame = t.NewFrame(form).AddText("Navigate using the tab key. You can press ctrl+c at any time to exit the wizard", true, t.AlignCenter, tcell.ColorWhite)
 
 	pages.AddPage("main", frame, true, true)
 	pages.AddPage("modal", quitModal, true, false)

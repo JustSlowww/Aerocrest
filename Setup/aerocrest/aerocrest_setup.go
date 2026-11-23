@@ -125,8 +125,8 @@ func main() {
 			pages.SwitchToPage("modal")
 		})
 
-	form.SetBorder(true).SetTitle("Aerocrest Installation Wizard")
-	frame = t.NewFrame(form).AddText("Navigate using the tab key. You can press esc at any time to exit the wizard", true, t.AlignCenter, tcell.ColorWhite)
+	form.SetBorder(true).SetTitle("Aerocrest Installation Wizard").SetTitleAlign(t.AlignLeft)
+	frame = t.NewFrame(form).AddText("Controls: TAB key to navigate, CTRL+C to exit", true, t.AlignCenter, tcell.ColorWhite)
 
 	// pages
 	pages.AddPage("main", frame, true, true)
