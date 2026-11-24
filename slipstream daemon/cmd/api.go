@@ -102,6 +102,7 @@ func (app *api) Mount() http.Handler {
 				mem, err := strconv.Atoi(request.URL.Query().Get("ram")) // in mb
 				ssd := request.URL.Query().Get("ssd")                    // format ex 500M
 				mcVer := request.URL.Query().Get("version")
+				port := request.URL.Query().Get("port")
 				if mcVer == "" {
 					mcVer = "LATEST"
 				}
@@ -139,7 +140,7 @@ func (app *api) Mount() http.Handler {
 							"size": ssd,
 						},
 						PortBindings: map[docker.Port][]docker.PortBinding{
-							"25565/tcp": {{HostIP: "0.0.0.0", HostPort: "0"}},
+							"25565/tcp": {{HostIP: "0.0.0.0", HostPort: port}},
 						},
 					},
 				})
@@ -159,14 +160,14 @@ func (app *api) Mount() http.Handler {
 				}
 				server := newServer{
 					Id:   container.ID,
-					Port: info.NetworkSettings.Ports["25565/tcp"][0].HostPort,
+					Port: port,
 				}
 				sInfo, err := json.MarshalIndent(server, "", "  ")
 				if err != nil {
 					http.Error(writer, err.Error(), http.StatusInternalServerError)
 					return
 				}
-				appDir := filepath.Join("/etc/slipstream/")
+				appDir := "/etc/slipstream/"
 				byteData, err := json.MarshalIndent(info.HostConfig, "", "  ")
 				if err != nil {
 					http.Error(writer, err.Error(), http.StatusInternalServerError)

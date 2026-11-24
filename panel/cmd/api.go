@@ -66,17 +66,20 @@ type nodes struct {
 	DiskTotal string `db:"total_disk_mb"`
 	RamTotal  string `db:"total_ram_mb"`
 	Token     string `db:"token"`
+	MinPort   string `db:"min_port"`
+	MaxPort   string `db:"max_port"`
 }
 
 type servers struct {
-	ServerId string `db:"serverid"`
-	NodeId   string `db:"nodeid"`
-	Name     string `db:"name"`
-	Image    string `db:"image"`
-	RamMb    string `db:"ram_mb"`
-	CpuLimit string `db:"cpu_limit"`
-	DiskMb   string `db:"disk_mb"`
-	Node     nodes  `db:"-"`
+	ServerId     string `db:"serverid"`
+	NodeId       string `db:"nodeid"`
+	Name         string `db:"name"`
+	Image        string `db:"image"`
+	RamMb        string `db:"ram_mb"`
+	CpuLimit     string `db:"cpu_limit"`
+	DiskMb       string `db:"disk_mb"`
+	ServerIpPort string `db:"-"`
+	Node         nodes  `db:"-"`
 }
 
 type newServer struct {
@@ -495,12 +498,19 @@ func (app *api) Mount() http.Handler {
 			var serverI newServer
 			var servId string
 			if strings.Contains(game, "itzg/minecraft-server") {
+				port, err := getFreePort(r.Context(), pool, nodeInfo.NodeId)
+				if err != nil {
+					log.Printf("failed to get free port: %s", err.Error())
+					http.Error(w, "failed to get free port", http.StatusBadRequest)
+					return
+				}
 				q := url.Values{}
 				q.Add("image", game)
 				q.Add("ram", ram)
 				q.Add("cpu", cpu)
 				q.Add("version", "26.3")
 				q.Add("ssd", disk+"M")
+				q.Add("port", port)
 				request, err := http.NewRequest("POST", "http://"+nodeInfo.IpAddress+":"+nodeInfo.Port+"/api/servers/minecraft?"+q.Encode(), nil)
 				if err != nil {
 					log.Printf("failed create server: %s", err.Error())
@@ -535,6 +545,12 @@ func (app *api) Mount() http.Handler {
 					if err != nil {
 						log.Printf("failed create server: %s", err.Error())
 						http.Error(w, "failed create server", http.StatusBadRequest)
+						return
+					}
+					_, err := newAllocation(r.Context(), pool, serverI.Id, nodeInfo.NodeId, port)
+					if err != nil {
+						log.Printf("failed to allocate port to server: %s", err.Error())
+						http.Error(w, "failed to allocate port to server", http.StatusBadRequest)
 						return
 					}
 				} else {
@@ -586,6 +602,8 @@ func (app *api) Mount() http.Handler {
 		token := r.PostForm.Get("token")
 		disk := r.PostForm.Get("disk")
 		ram := r.PostForm.Get("ram")
+		minPort := r.PostForm.Get("min_port")
+		maxPort := r.PostForm.Get("max_port")
 		request, err := http.NewRequest("GET", fmt.Sprintf("http://%s:%s/ping", ip, port), nil)
 		if err != nil {
 			log.Printf("node did not respond: %s", err.Error())
@@ -617,7 +635,7 @@ func (app *api) Mount() http.Handler {
 			http.Error(w, "server did not respond correctly", http.StatusInternalServerError)
 			return
 		}
-		_, err = createNode(r.Context(), pool, name, ip, port, token, disk, ram)
+		_, err = createNode(r.Context(), pool, name, ip, port, token, disk, ram, minPort, maxPort)
 		if err != nil {
 			log.Printf("failed to create node in db: %s", err.Error())
 			http.Error(w, fmt.Sprintf("failed to create node in db: %s", err.Error()), http.StatusInternalServerError)
@@ -805,10 +823,10 @@ func deleteExpiredSessions(ctx context.Context, pool *pgxpool.Pool, userId strin
 	return nil
 }
 
-func createNode(ctx context.Context, pool *pgxpool.Pool, nodeName, ipAddr, port, token, totalDisk, totalRam string) (string, error) {
-	query := `INSERT INTO nodes (nodeId, name , ipaddr, port, token, total_disk_mb, total_ram_mb) VALUES ($1, $2, $3, $4, $5, $6, $7)`
+func createNode(ctx context.Context, pool *pgxpool.Pool, nodeName, ipAddr, port, token, totalDisk, totalRam, minport, maxport string) (string, error) {
+	query := `INSERT INTO nodes (nodeId, name , ipaddr, port, token, total_disk_mb, total_ram_mb, min_port, max_port) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)`
 	nodeId := uuid.New().String()
-	_, err := pool.Exec(ctx, query, nodeId, nodeName, ipAddr, port, token, totalDisk, totalRam)
+	_, err := pool.Exec(ctx, query, nodeId, nodeName, ipAddr, port, token, totalDisk, totalRam, minport, maxport)
 	return nodeId, err
 }
 
@@ -824,6 +842,21 @@ func createServer(ctx context.Context, pool *pgxpool.Pool, userId, nodeName stri
 		return "", err
 	}
 	return sInfo.ServerId, nil
+}
+
+func newAllocation(ctx context.Context, pool *pgxpool.Pool, serverid, nodeid, uport string) (string, error) {
+	id, err := getNodeById(ctx, pool, nodeid)
+	if err != nil {
+		return "0", err
+	}
+	nodeip := id.IpAddress
+	query := `INSERT INTO allocations (serverid, nodeid, used_port, nodeip) VALUES ($1,$2,$3,$4)`
+
+	_, err = pool.Exec(ctx, query, serverid, nodeid, uport, nodeip)
+	if err != nil {
+		return "0", err
+	}
+	return uport, nil
 }
 
 func logout(ctx context.Context, pool *pgxpool.Pool, r *http.Request) error {
@@ -989,7 +1022,7 @@ func getUser(ctx context.Context, pool *pgxpool.Pool, username string) (string, 
 }
 
 func getNodes(ctx context.Context, pool *pgxpool.Pool) ([]nodes, error) {
-	query := `SELECT nodeId, name, ipaddr, port, total_disk_mb, total_ram_mb FROM nodes`
+	query := `SELECT nodeId, name, ipaddr, port, total_disk_mb, total_ram_mb, min_port, max_port FROM nodes`
 	rows, err := pool.Query(ctx, query)
 	if err != nil {
 		return nil, err
@@ -1057,6 +1090,11 @@ func getUserServers(ctx context.Context, pool *pgxpool.Pool, userId string) ([]s
 		} else {
 			s.Node = nodes{}
 		}
+		port, err := getMainPort(ctx, pool, s.ServerId)
+		if err != nil {
+			return nil, err
+		}
+		s.ServerIpPort = s.Node.IpAddress + ":" + port
 		newCpuLimit := cpuLimit * 100
 		percentCpuLimit := fmt.Sprintf("%.0f%%", newCpuLimit)
 		s.CpuLimit = percentCpuLimit
@@ -1142,4 +1180,18 @@ func getFreePort(ctx context.Context, pool *pgxpool.Pool, nodeId string) (string
 		}
 	}
 	return strconv.Itoa(freePort), nil
+}
+
+func getMainPort(ctx context.Context, pool *pgxpool.Pool, serverid string) (string, error) {
+	query := `SELECT used_port FROM allocations WHERE serverid = $1 ORDER BY id ASC LIMIT 1`
+
+	rows, err := pool.Query(ctx, query, serverid)
+	if err != nil {
+		return "0", err
+	}
+	port, err := pgx.CollectOneRow(rows, pgx.RowTo[string])
+	if err != nil {
+		return "0", err
+	}
+	return port, nil
 }
