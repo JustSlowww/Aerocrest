@@ -15,6 +15,7 @@ import (
 	"log"
 	"net/http"
 	"net/url"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -97,18 +98,21 @@ func renderPage(w http.ResponseWriter, pageFile string, data any) error {
 }
 
 func (app *api) Mount() http.Handler {
+	// init router + middleware
 	router := chi.NewRouter()
 	router.Use(middleware.RequestID)
 	router.Use(middleware.ClientIPFromRemoteAddr)
 	router.Use(middleware.Logger)
 	router.Use(middleware.Recoverer)
-	router.Use(middleware.Timeout(90 * time.Second))
+	router.Use(middleware.Timeout(90 * time.Second)) //timeout
 	router.Use(httprate.LimitBy(60, time.Minute, func(r *http.Request) (string, error) {
 		return httprate.CanonicalizeIP(middleware.GetClientIP(r.Context())), nil
-	}))
+	})) // ratelimit
 	dbUrl := fmt.Sprintf("postgres://postgres:%s@127.0.0.1:%s/%s?sslmode=disable", url.QueryEscape(app.dbConfig.dbPass), app.dbConfig.dbPort, app.dbConfig.dbName)
 	// change sslmode=require before production
 	ctx := context.Background()
+
+	// create db pool and init tables
 	pool, err := pgxpool.New(ctx, dbUrl)
 	if err != nil {
 		log.Fatalf("could not create pool. Err: %s", err.Error())
@@ -133,9 +137,17 @@ func (app *api) Mount() http.Handler {
 	if err != nil {
 		log.Fatalf("could not init servers table. Err: %s", err.Error())
 	}
+	err = initAllocationsTable(ctx, pool)
+	if err != nil {
+		log.Fatalf("could not init allocations table. Err: %s", err.Error())
+	}
+
+	// templates for login logout notfound
 	tmpl := template.Must(template.ParseFS(templateFS,
 		"templates/*.html",
 	))
+
+	// Endpoints
 	router.NotFound(func(w http.ResponseWriter, request *http.Request) {
 		w.WriteHeader(http.StatusNotFound)
 		err := tmpl.ExecuteTemplate(w, "NotFound.html", nil)
@@ -713,7 +725,17 @@ func (app *api) Mount() http.Handler {
 		http.Redirect(w, r, "/", http.StatusSeeOther)
 	})
 	router.Post("/logout", func(w http.ResponseWriter, r *http.Request) {
-		err := logout(r.Context(), pool, r)
+		_, validSession, err := getSessionValidity(r.Context(), pool, r)
+		if err != nil {
+			log.Printf("session validity check failed, error : %s", err.Error())
+			http.Error(w, fmt.Sprintf("session validity check failed, error : %s", err.Error()), http.StatusInternalServerError)
+			return
+		}
+		if !validSession {
+			http.Redirect(w, r, "/", http.StatusSeeOther)
+			return
+		}
+		err = logout(r.Context(), pool, r)
 		if err != nil {
 			log.Printf("could not logout %s", err.Error())
 			http.Error(w, "internal server error. Logout failed", http.StatusInternalServerError)
@@ -749,18 +771,6 @@ func (app *api) Run(h http.Handler) error {
 	return srv.ListenAndServe()
 }
 
-func initUsersTable(ctx context.Context, pool *pgxpool.Pool) error {
-	query := `CREATE TABLE IF NOT EXISTS users (
-    user_id UUID PRIMARY KEY,
-    username varchar(64) UNIQUE NOT NULL,
-    password_hash varchar(255) NOT NULL,
-    perms int DEFAULT 0 NOT NULL,
-    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP NOT NULL
-)`
-	_, err := pool.Exec(ctx, query)
-	return err
-}
-
 func newUser(ctx context.Context, pool *pgxpool.Pool, username, password string) (string, error) {
 	userId := uuid.New()
 	hash, err := argon2id.CreateHash(password, argon2id.DefaultParams)
@@ -774,18 +784,82 @@ func newUser(ctx context.Context, pool *pgxpool.Pool, username, password string)
 	return userId.String(), err
 }
 
-func getUser(ctx context.Context, pool *pgxpool.Pool, username string) (string, string, error) {
-	query := `SELECT user_id, password_hash FROM users WHERE username=$1;`
-	var pswdHash string
-	var userId uuid.UUID
-	err := pool.QueryRow(ctx, query, username).Scan(&userId, &pswdHash)
+func createSession(ctx context.Context, pool *pgxpool.Pool, userId, ipAddr string) (string, error) {
+	rawToken, tokenHash, err := generateSessionToken()
 	if err != nil {
-		if errors.Is(err, pgx.ErrNoRows) {
-			return "", "", fmt.Errorf("user not found")
-		}
-		return "", "", err
+		return "", err
 	}
-	return userId.String(), pswdHash, nil
+	query := `INSERT INTO sessions (user_id, token_hash , ipaddr) VALUES ($1, $2, $3)`
+
+	_, err = pool.Exec(ctx, query, userId, tokenHash, ipAddr)
+	return rawToken, err
+}
+
+func deleteExpiredSessions(ctx context.Context, pool *pgxpool.Pool, userId string) error {
+	query := `DELETE FROM sessions WHERE user_id=$1 AND expires_at < NOW()`
+
+	_, err := pool.Exec(ctx, query, userId)
+	if err != nil {
+		return err
+	}
+	return nil
+}
+
+func createNode(ctx context.Context, pool *pgxpool.Pool, nodeName, ipAddr, port, token, totalDisk, totalRam string) (string, error) {
+	query := `INSERT INTO nodes (nodeId, name , ipaddr, port, token, total_disk_mb, total_ram_mb) VALUES ($1, $2, $3, $4, $5, $6, $7)`
+	nodeId := uuid.New().String()
+	_, err := pool.Exec(ctx, query, nodeId, nodeName, ipAddr, port, token, totalDisk, totalRam)
+	return nodeId, err
+}
+
+func createServer(ctx context.Context, pool *pgxpool.Pool, userId, nodeName string, sInfo servers) (string, error) {
+	node, err := getNode(ctx, pool, nodeName)
+	if err != nil {
+		return "", err
+	}
+	query := `INSERT INTO servers (serverid, nodeid, name, image, ram_mb, disk_mb, cpu_limit, user_id) VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`
+
+	_, err = pool.Exec(ctx, query, sInfo.ServerId, node.NodeId, sInfo.Name, sInfo.Image, sInfo.RamMb, sInfo.DiskMb, sInfo.CpuLimit, userId)
+	if err != nil {
+		return "", err
+	}
+	return sInfo.ServerId, nil
+}
+
+func logout(ctx context.Context, pool *pgxpool.Pool, r *http.Request) error {
+	cookie, err := r.Cookie("session_token")
+	if err != nil {
+		return err
+	}
+	rawToken := cookie.Value
+	tokenHash := hashToken(rawToken)
+	query := `SELECT user_id FROM sessions WHERE token_hash=$1 AND expires_at > NOW()`
+	var userId string
+	err = pool.QueryRow(ctx, query, tokenHash).Scan(&userId)
+	if err != nil {
+		return err
+	}
+	query = `DELETE FROM sessions WHERE user_id=$1`
+	_, err = pool.Exec(ctx, query, userId)
+	if err != nil {
+		return err
+	}
+
+	return nil
+}
+
+// table inits
+
+func initUsersTable(ctx context.Context, pool *pgxpool.Pool) error {
+	query := `CREATE TABLE IF NOT EXISTS users (
+    user_id UUID PRIMARY KEY,
+    username varchar(64) UNIQUE NOT NULL,
+    password_hash varchar(255) NOT NULL,
+    perms int DEFAULT 0 NOT NULL,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP NOT NULL
+)`
+	_, err := pool.Exec(ctx, query)
+	return err
 }
 
 func initSessionsTable(ctx context.Context, pool *pgxpool.Pool) error {
@@ -800,33 +874,52 @@ func initSessionsTable(ctx context.Context, pool *pgxpool.Pool) error {
 	return err
 }
 
-func generateSessionToken() (string, string, error) {
-	bytes := make([]byte, 32)
-	_, err := rand.Read(bytes)
-	if err != nil {
-		return "", "", err
-	}
-	rawtoken := base64.RawURLEncoding.EncodeToString(bytes) // for cookie
-	hash := sha256.Sum256([]byte(rawtoken))
-	tokenHash := hex.EncodeToString(hash[:]) // for table
-	return rawtoken, tokenHash, nil
+func initNodesTable(ctx context.Context, pool *pgxpool.Pool) error {
+	query := `CREATE TABLE IF NOT EXISTS nodes (
+    nodeId varchar(255) PRIMARY KEY,
+    name varchar(255) UNIQUE NOT NULL,
+    ipaddr varchar(15) NOT NULL,
+    port varchar(5) NOT NULL,
+    token varchar(255) UNIQUE NOT NULL,
+    total_disk_mb varchar(255) NOT NULL,
+    total_ram_mb varchar(255) NOT NULL,
+    min_port varchar(6) NOT NULL,
+    max_port varchar(6) NOT NULL
+)`
+	_, err := pool.Exec(ctx, query)
+	return err
 }
 
-func hashToken(raw string) string {
-	hash := sha256.Sum256([]byte(raw))
-	return hex.EncodeToString(hash[:])
+func initServersTable(ctx context.Context, pool *pgxpool.Pool) error {
+	query := `CREATE TABLE IF NOT EXISTS servers (
+    serverId varchar(255) PRIMARY KEY,
+    nodeId varchar(255) NOT NULL REFERENCES nodes(nodeId) ON DELETE CASCADE,
+    name varchar(255) NOT NULL,
+    image varchar(255) NOT NULL,
+    ram_mb varchar(255) NOT NULL,
+    cpu_limit varchar(255) NOT NULL,
+    disk_mb varchar(255) NOT NULL,
+    user_id UUID NOT NULL REFERENCES users(user_id) ON DELETE CASCADE
+)`
+	_, err := pool.Exec(ctx, query)
+	return err
 }
 
-func createSession(ctx context.Context, pool *pgxpool.Pool, userId, ipAddr string) (string, error) {
-	rawToken, tokenHash, err := generateSessionToken()
-	if err != nil {
-		return "", err
-	}
-	query := `INSERT INTO sessions (user_id, token_hash , ipaddr) VALUES ($1, $2, $3)`
+func initAllocationsTable(ctx context.Context, pool *pgxpool.Pool) error {
+	query := `CREATE TABLE IF NOT EXISTS allocations (
+    id SERIAL PRIMARY KEY,
+    serverid varchar(255) NOT NULL REFERENCES servers(serverid) ON DELETE CASCADE,
+    nodeid varchar(255) NOT NULL REFERENCES nodes(nodeId) ON DELETE CASCADE,
+    nodeip varchar(15) NOT NULL,
+    used_port varchar(5) NOT NULL,
+    UNIQUE (nodeid, nodeip, used_port)
+)`
 
-	_, err = pool.Exec(ctx, query, userId, tokenHash, ipAddr)
-	return rawToken, err
+	_, err := pool.Exec(ctx, query)
+	return err
 }
+
+// getSmth funcs
 
 func getSessionValidity(ctx context.Context, pool *pgxpool.Pool, r *http.Request) (string, bool, error) {
 	cookie, err := r.Cookie("session_token")
@@ -850,16 +943,6 @@ func getSessionValidity(ctx context.Context, pool *pgxpool.Pool, r *http.Request
 		return "", false, err
 	}
 	return userId, true, nil
-}
-
-func deleteExpiredSessions(ctx context.Context, pool *pgxpool.Pool, userId string) error {
-	query := `DELETE FROM sessions WHERE user_id=$1 AND expires_at < NOW()`
-
-	_, err := pool.Exec(ctx, query, userId)
-	if err != nil {
-		return err
-	}
-	return nil
 }
 
 func getUserInfoFromSessionToken(ctx context.Context, pool *pgxpool.Pool, r *http.Request) (map[string]any, error) {
@@ -891,25 +974,18 @@ func getUserInfoFromSessionToken(ctx context.Context, pool *pgxpool.Pool, r *htt
 	}, nil
 }
 
-func initNodesTable(ctx context.Context, pool *pgxpool.Pool) error {
-	query := `CREATE TABLE IF NOT EXISTS nodes (
-    nodeId varchar(255) PRIMARY KEY,
-    name varchar(255) UNIQUE NOT NULL,
-    ipaddr varchar(15) NOT NULL,
-    port varchar(5) NOT NULL,
-    token varchar(255) UNIQUE NOT NULL,
-    total_disk_mb varchar(255) NOT NULL,
-    total_ram_mb varchar(255) NOT NULL
-)`
-	_, err := pool.Exec(ctx, query)
-	return err
-}
-
-func createNode(ctx context.Context, pool *pgxpool.Pool, nodeName, ipAddr, port, token, totalDisk, totalRam string) (string, error) {
-	query := `INSERT INTO nodes (nodeId, name , ipaddr, port, token, total_disk_mb, total_ram_mb) VALUES ($1, $2, $3, $4, $5, $6, $7)`
-	nodeId := uuid.New().String()
-	_, err := pool.Exec(ctx, query, nodeId, nodeName, ipAddr, port, token, totalDisk, totalRam)
-	return nodeId, err
+func getUser(ctx context.Context, pool *pgxpool.Pool, username string) (string, string, error) {
+	query := `SELECT user_id, password_hash FROM users WHERE username=$1;`
+	var pswdHash string
+	var userId uuid.UUID
+	err := pool.QueryRow(ctx, query, username).Scan(&userId, &pswdHash)
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return "", "", fmt.Errorf("user not found")
+		}
+		return "", "", err
+	}
+	return userId.String(), pswdHash, nil
 }
 
 func getNodes(ctx context.Context, pool *pgxpool.Pool) ([]nodes, error) {
@@ -949,21 +1025,6 @@ func getNodeById(ctx context.Context, pool *pgxpool.Pool, nodeId string) (*nodes
 		return nil, err
 	}
 	return &node, nil
-}
-
-func initServersTable(ctx context.Context, pool *pgxpool.Pool) error {
-	query := `CREATE TABLE IF NOT EXISTS servers (
-    serverId varchar(255) PRIMARY KEY,
-    nodeId varchar(255) NOT NULL REFERENCES nodes(nodeId) ON DELETE CASCADE,
-    name varchar(255) NOT NULL,
-    image varchar(255) NOT NULL,
-    ram_mb varchar(255) NOT NULL,
-    cpu_limit varchar(255) NOT NULL,
-    disk_mb varchar(255) NOT NULL,
-    user_id UUID NOT NULL REFERENCES users(user_id) ON DELETE CASCADE
-)`
-	_, err := pool.Exec(ctx, query)
-	return err
 }
 
 func getUserServers(ctx context.Context, pool *pgxpool.Pool, userId string) ([]servers, error) {
@@ -1022,38 +1083,63 @@ func getServer(ctx context.Context, pool *pgxpool.Pool, serverId, userId string)
 	return currentServer, nil
 }
 
-func createServer(ctx context.Context, pool *pgxpool.Pool, userId, nodeName string, sInfo servers) (string, error) {
-	node, err := getNode(ctx, pool, nodeName)
-	if err != nil {
-		return "", err
-	}
-	query := `INSERT INTO servers (serverid, nodeid, name, image, ram_mb, disk_mb, cpu_limit, user_id) VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`
+// helpers
 
-	_, err = pool.Exec(ctx, query, sInfo.ServerId, node.NodeId, sInfo.Name, sInfo.Image, sInfo.RamMb, sInfo.DiskMb, sInfo.CpuLimit, userId)
+func generateSessionToken() (string, string, error) {
+	bytes := make([]byte, 32)
+	_, err := rand.Read(bytes)
 	if err != nil {
-		return "", err
+		return "", "", err
 	}
-	return sInfo.ServerId, nil
+	rawtoken := base64.RawURLEncoding.EncodeToString(bytes) // for cookie
+	hash := sha256.Sum256([]byte(rawtoken))
+	tokenHash := hex.EncodeToString(hash[:]) // for table
+	return rawtoken, tokenHash, nil
 }
 
-func logout(ctx context.Context, pool *pgxpool.Pool, r *http.Request) error {
-	cookie, err := r.Cookie("session_token")
-	if err != nil {
-		return err
-	}
-	rawToken := cookie.Value
-	tokenHash := hashToken(rawToken)
-	query := `SELECT user_id FROM sessions WHERE token_hash=$1 AND expires_at > NOW()`
-	var userId string
-	err = pool.QueryRow(ctx, query, tokenHash).Scan(&userId)
-	if err != nil {
-		return err
-	}
-	query = `DELETE FROM sessions WHERE user_id=$1`
-	_, err = pool.Exec(ctx, query, userId)
-	if err != nil {
-		return err
-	}
+func hashToken(raw string) string {
+	hash := sha256.Sum256([]byte(raw))
+	return hex.EncodeToString(hash[:])
+}
 
-	return nil
+func getFreePort(ctx context.Context, pool *pgxpool.Pool, nodeId string) (string, error) {
+	query := `SELECT used_port FROM allocations WHERE nodeid = $1`
+	rows, err := pool.Query(ctx, query, nodeId)
+	if err != nil {
+		return "0", err
+	}
+	uPorts, err := pgx.CollectRows(rows, pgx.RowTo[string])
+	if err != nil {
+		return "0", err
+	}
+	query = `SELECT min_port, max_port FROM nodes WHERE nodeid = $1`
+	var minPort, maxPort string
+	err = pool.QueryRow(ctx, query, nodeId).Scan(&minPort, &maxPort)
+	if err != nil {
+		return "0", err
+	}
+	iminPort, err := strconv.Atoi(minPort)
+	if err != nil {
+		return "0", err
+	}
+	imaxPort, err := strconv.Atoi(maxPort)
+	if err != nil {
+		return "0", err
+	}
+	var intUPorts []int
+	for _, p := range uPorts {
+		usedPort, err := strconv.Atoi(p)
+		if err != nil {
+			continue
+		}
+		intUPorts = append(intUPorts, usedPort)
+	}
+	var freePort int
+	for port := iminPort; port <= imaxPort; port++ {
+		if !slices.Contains(intUPorts, port) {
+			freePort = port
+			break
+		}
+	}
+	return strconv.Itoa(freePort), nil
 }
