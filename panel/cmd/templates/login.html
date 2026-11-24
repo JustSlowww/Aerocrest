@@ -60,13 +60,16 @@
                 </div>
                 <div class="mb-7">
                     <label for="password" class="form-label">Password</label>
-                    <input type="password" class="form-control" name="password" placeholder="Enter password" id="password" autocomplete="current-password" maxlength="72" required/>
+                    <input type="password" class="form-control mb-3" name="password" placeholder="Enter password" id="password" autocomplete="current-password" maxlength="72" required/>
                     <div class="strength-bar" data-bs-strength></div>
                 </div>
             </fieldset>
             <div class="d-flex flex-column">
-                <button type="submit" class="btn-outline theme-primary mb-2">Login</button>
-                <a type="button" href="/signup" class="theme-primary" style="text-decoration: none;">Sign-up</a>
+                <button type="submit" class="btn-outline theme-primary mb-2">Sign in</button>
+                <div class="text-center">
+                    <a>Dont have an account? </a>
+                    <a type="button" href="/signup" class="theme-primary" style="text-decoration: none;">Sign-up</a>
+                </div>
             </div>
             {{ if .ShowError}}
             <p class="color">{{ .ErrorMsg }}</p>
