@@ -66,8 +66,6 @@ func (app *api) Mount() http.Handler {
 	r.Use(middleware.Logger)
 	r.Use(middleware.Recoverer)
 
-	r.Use(middleware.Timeout(90 * time.Second))
-
 	r.Get("/health", func(w http.ResponseWriter, r *http.Request) {
 		w.Write([]byte("The API is functioning properly"))
 	})
@@ -83,254 +81,262 @@ func (app *api) Mount() http.Handler {
 	if dErr != nil {
 		log.Printf("Failed to create docker client, err: %s", dErr)
 	}
-	r.Route("/api", func(r chi.Router) {
+	// no timeout for ws
+	r.Group(func(r chi.Router) {
 		r.Use(BearerKeyAuth(app.config.secret))
-		r.Route("/servers", func(r chi.Router) {
-			r.Get("/", func(writer http.ResponseWriter, request *http.Request) {
-				containers, dErr := dockerCli.ListContainers(docker.ListContainersOptions{All: true})
-				if dErr != nil {
-					log.Printf("Failed to list docker containers, err: %s", dErr)
-				}
-				marshal, dErr := json.MarshalIndent(containers, "", "  ")
-				if dErr != nil {
-					log.Printf("Failed to marshall the docker containers list, err: %s", dErr)
-				}
-				writer.Write(marshal)
-			})
-			r.Post("/minecraft", func(writer http.ResponseWriter, request *http.Request) {
-				image := request.URL.Query().Get("image")
-				mem, err := strconv.Atoi(request.URL.Query().Get("ram")) // in mb
-				ssd := request.URL.Query().Get("ssd")                    // format ex 500M
-				mcVer := request.URL.Query().Get("version")
-				port := request.URL.Query().Get("port")
-				if mcVer == "" {
-					mcVer = "LATEST"
-				}
-				if err != nil {
-					http.Error(writer, "ERROR: could not convert ram string to int: "+err.Error(), http.StatusBadRequest)
-					return
-				}
-				cpuCount, err := strconv.ParseFloat(request.URL.Query().Get("cpu"), 64)
-				if err != nil {
-					http.Error(writer, "ERROR: could not convert cpu string to float: "+err.Error(), http.StatusBadRequest)
-					return
-				}
-				iSplit := strings.Split(image, ":")
-				err = dockerCli.PullImage(docker.PullImageOptions{
-					Repository: iSplit[0],
-					Tag:        iSplit[1],
-				}, docker.AuthConfiguration{})
-				if err != nil {
-					http.Error(writer, "ERROR: could not pull image: "+err.Error(), http.StatusInternalServerError)
-					return
-				}
-				container, err := dockerCli.CreateContainer(docker.CreateContainerOptions{
-					Config: &docker.Config{
-						Image:        image,
-						Env:          []string{"EULA=TRUE", "VERSION=" + mcVer, fmt.Sprintf("MEMORY=%dM", mem-256)},
-						ExposedPorts: map[docker.Port]struct{}{"25565/tcp": {}},
-						Tty:          true,
-						OpenStdin:    true,
-					},
-					HostConfig: &docker.HostConfig{
-						Memory:    int64(mem) * 1024 * 1024,
-						CPUPeriod: 100000,
-						CPUQuota:  int64(math.Round(100000 * cpuCount)),
-						StorageOpt: map[string]string{
-							"size": ssd,
-						},
-						PortBindings: map[docker.Port][]docker.PortBinding{
-							"25565/tcp": {{HostIP: "0.0.0.0", HostPort: port}},
-						},
-					},
+		r.Get("/api/servers/{uuid}/ws", handleWs(dockerCli))
+	})
+	// with timeout
+	r.Group(func(r chi.Router) {
+		r.Use(BearerKeyAuth(app.config.secret))
+		r.Use(middleware.Timeout(90 * time.Second))
+		r.Route("/api", func(r chi.Router) {
+			r.Route("/servers", func(r chi.Router) {
+				r.Get("/", func(writer http.ResponseWriter, request *http.Request) {
+					containers, dErr := dockerCli.ListContainers(docker.ListContainersOptions{All: true})
+					if dErr != nil {
+						log.Printf("Failed to list docker containers, err: %s", dErr)
+					}
+					marshal, dErr := json.MarshalIndent(containers, "", "  ")
+					if dErr != nil {
+						log.Printf("Failed to marshall the docker containers list, err: %s", dErr)
+					}
+					writer.Write(marshal)
 				})
-				if err != nil {
-					http.Error(writer, "ERROR: could not create container: "+err.Error(), http.StatusInternalServerError)
-					return
-				}
-				err = dockerCli.StartContainer(container.ID, nil)
-				if err != nil {
-					http.Error(writer, "ERROR: could not start container: "+err.Error(), http.StatusInternalServerError)
-					return
-				}
-				info, err := dockerCli.InspectContainerWithOptions(docker.InspectContainerOptions{ID: container.ID})
-				if err != nil {
-					http.Error(writer, err.Error(), http.StatusInternalServerError)
-					return
-				}
-				server := newServer{
-					Id:   container.ID,
-					Port: port,
-				}
-				sInfo, err := json.MarshalIndent(server, "", "  ")
-				if err != nil {
-					http.Error(writer, err.Error(), http.StatusInternalServerError)
-					return
-				}
-				appDir := "/etc/slipstream/"
-				byteData, err := json.MarshalIndent(info.HostConfig, "", "  ")
-				if err != nil {
-					http.Error(writer, err.Error(), http.StatusInternalServerError)
-					return
-				}
-				err = os.WriteFile(filepath.Join(appDir, info.ID+".json"), byteData, 0600)
-				if err != nil {
-					http.Error(writer, err.Error(), http.StatusInternalServerError)
-					return
-				}
-				err = dockerCli.StopContainer(container.ID, 60)
-				if err != nil {
-					http.Error(writer, err.Error(), http.StatusInternalServerError)
-					return
-				}
-				writer.Write(sInfo)
-			})
-			r.Route("/{uuid}", func(r chi.Router) {
-				r.Route("/power", func(r chi.Router) {
-					r.Get("/", func(w http.ResponseWriter, r *http.Request) {
-						containerId := chi.URLParam(r, "uuid")
-						options, err := dockerCli.InspectContainerWithOptions(docker.InspectContainerOptions{ID: containerId, Context: r.Context()})
-						if err != nil {
-							if errors.Is(err, &docker.NoSuchContainer{}) {
-								http.Error(w, "Server does not exist", http.StatusNotFound)
+				r.Post("/minecraft", func(writer http.ResponseWriter, request *http.Request) {
+					image := request.URL.Query().Get("image")
+					mem, err := strconv.Atoi(request.URL.Query().Get("ram")) // in mb
+					ssd := request.URL.Query().Get("ssd")                    // format ex 500M
+					mcVer := request.URL.Query().Get("version")
+					port := request.URL.Query().Get("port")
+					if mcVer == "" {
+						mcVer = "LATEST"
+					}
+					if err != nil {
+						http.Error(writer, "ERROR: could not convert ram string to int: "+err.Error(), http.StatusBadRequest)
+						return
+					}
+					cpuCount, err := strconv.ParseFloat(request.URL.Query().Get("cpu"), 64)
+					if err != nil {
+						http.Error(writer, "ERROR: could not convert cpu string to float: "+err.Error(), http.StatusBadRequest)
+						return
+					}
+					iSplit := strings.Split(image, ":")
+					err = dockerCli.PullImage(docker.PullImageOptions{
+						Repository: iSplit[0],
+						Tag:        iSplit[1],
+					}, docker.AuthConfiguration{})
+					if err != nil {
+						http.Error(writer, "ERROR: could not pull image: "+err.Error(), http.StatusInternalServerError)
+						return
+					}
+					container, err := dockerCli.CreateContainer(docker.CreateContainerOptions{
+						Config: &docker.Config{
+							Image:        image,
+							Env:          []string{"EULA=TRUE", "VERSION=" + mcVer, fmt.Sprintf("MEMORY=%dM", mem-256)},
+							ExposedPorts: map[docker.Port]struct{}{"25565/tcp": {}},
+							Tty:          true,
+							OpenStdin:    true,
+						},
+						HostConfig: &docker.HostConfig{
+							Memory:    int64(mem) * 1024 * 1024,
+							CPUPeriod: 100000,
+							CPUQuota:  int64(math.Round(100000 * cpuCount)),
+							StorageOpt: map[string]string{
+								"size": ssd,
+							},
+							PortBindings: map[docker.Port][]docker.PortBinding{
+								"25565/tcp": {{HostIP: "0.0.0.0", HostPort: port}},
+							},
+						},
+					})
+					if err != nil {
+						http.Error(writer, "ERROR: could not create container: "+err.Error(), http.StatusInternalServerError)
+						return
+					}
+					err = dockerCli.StartContainer(container.ID, nil)
+					if err != nil {
+						http.Error(writer, "ERROR: could not start container: "+err.Error(), http.StatusInternalServerError)
+						return
+					}
+					info, err := dockerCli.InspectContainerWithOptions(docker.InspectContainerOptions{ID: container.ID})
+					if err != nil {
+						http.Error(writer, err.Error(), http.StatusInternalServerError)
+						return
+					}
+					server := newServer{
+						Id:   container.ID,
+						Port: port,
+					}
+					sInfo, err := json.MarshalIndent(server, "", "  ")
+					if err != nil {
+						http.Error(writer, err.Error(), http.StatusInternalServerError)
+						return
+					}
+					appDir := "/etc/slipstream/"
+					byteData, err := json.MarshalIndent(info.HostConfig, "", "  ")
+					if err != nil {
+						http.Error(writer, err.Error(), http.StatusInternalServerError)
+						return
+					}
+					err = os.WriteFile(filepath.Join(appDir, info.ID+".json"), byteData, 0600)
+					if err != nil {
+						http.Error(writer, err.Error(), http.StatusInternalServerError)
+						return
+					}
+					err = dockerCli.StopContainer(container.ID, 60)
+					if err != nil {
+						http.Error(writer, err.Error(), http.StatusInternalServerError)
+						return
+					}
+					writer.Write(sInfo)
+				})
+				r.Route("/{uuid}", func(r chi.Router) {
+					r.Route("/power", func(r chi.Router) {
+						r.Get("/", func(w http.ResponseWriter, r *http.Request) {
+							containerId := chi.URLParam(r, "uuid")
+							options, err := dockerCli.InspectContainerWithOptions(docker.InspectContainerOptions{ID: containerId, Context: r.Context()})
+							if err != nil {
+								if errors.Is(err, &docker.NoSuchContainer{}) {
+									http.Error(w, "Server does not exist", http.StatusNotFound)
+									return
+								}
+								http.Error(w, err.Error(), http.StatusInternalServerError)
 								return
 							}
-							http.Error(w, err.Error(), http.StatusInternalServerError)
-							return
-						}
-						state := options.State
-						containerStatus := state.Status
-						running := state.Running
-						code := state.ExitCode
-						if state.Health.Status == "starting" {
-							w.Write([]byte("{\"state\":1}"))
-							return
-						}
-						if !running && code == 0 && containerStatus == "exited" {
-							w.Write([]byte("{\"state\":0}"))
-							return
-						}
-						if running {
-							w.Write([]byte("{\"state\":2}"))
-							return
-						}
-						if !running && code != 0 {
-							w.Write([]byte("{\"state\":4}"))
-							return
-						}
+							state := options.State
+							containerStatus := state.Status
+							running := state.Running
+							code := state.ExitCode
+							if state.Health.Status == "starting" {
+								w.Write([]byte("{\"state\":1}"))
+								return
+							}
+							if !running && code == 0 && containerStatus == "exited" {
+								w.Write([]byte("{\"state\":0}"))
+								return
+							}
+							if running {
+								w.Write([]byte("{\"state\":2}"))
+								return
+							}
+							if !running && code != 0 {
+								w.Write([]byte("{\"state\":4}"))
+								return
+							}
+						})
+						r.Post("/", func(writer http.ResponseWriter, request *http.Request) {
+							instruction := request.URL.Query().Get("instruction")
+							containerId := chi.URLParam(request, "uuid")
+							switch instruction {
+							case "stop":
+								err := dockerCli.StopContainer(containerId, 60)
+								if err != nil {
+									http.Error(writer, err.Error(), http.StatusInternalServerError)
+									return
+								}
+								writer.Write([]byte("successfully stopped the server"))
+							case "restart":
+								err := dockerCli.StopContainer(containerId, 60)
+								if err != nil {
+									http.Error(writer, err.Error(), http.StatusInternalServerError)
+									return
+								}
+								appDir := filepath.Join("/etc/slipstream/", containerId+".json")
+								file, err := os.Open(appDir)
+								if err != nil {
+									http.Error(writer, err.Error(), http.StatusInternalServerError)
+									return
+								}
+								var hostCfg docker.HostConfig
+								err = json.NewDecoder(file).Decode(&hostCfg)
+								if err != nil {
+									http.Error(writer, err.Error(), http.StatusInternalServerError)
+									return
+								}
+								err = dockerCli.StartContainer(containerId, &hostCfg)
+								if err != nil {
+									http.Error(writer, err.Error(), http.StatusInternalServerError)
+									return
+								}
+								writer.Write([]byte("successfully restarted the server"))
+							case "start":
+								appDir := filepath.Join("/etc/slipstream/", containerId+".json")
+								file, err := os.Open(appDir)
+								if err != nil {
+									http.Error(writer, err.Error(), http.StatusInternalServerError)
+									return
+								}
+								var hostCfg docker.HostConfig
+								err = json.NewDecoder(file).Decode(&hostCfg)
+								if err != nil {
+									http.Error(writer, err.Error(), http.StatusInternalServerError)
+									return
+								}
+								err = dockerCli.StartContainer(containerId, &hostCfg)
+								if err != nil {
+									http.Error(writer, err.Error(), http.StatusInternalServerError)
+									return
+								}
+								writer.Write([]byte("successfully started the server"))
+
+								// add kill too
+							}
+
+						})
 					})
-					r.Post("/", func(writer http.ResponseWriter, request *http.Request) {
-						instruction := request.URL.Query().Get("instruction")
+					r.Delete("/", func(writer http.ResponseWriter, request *http.Request) {
 						containerId := chi.URLParam(request, "uuid")
-						switch instruction {
-						case "stop":
-							err := dockerCli.StopContainer(containerId, 60)
-							if err != nil {
-								http.Error(writer, err.Error(), http.StatusInternalServerError)
-								return
-							}
-							writer.Write([]byte("successfully stopped the server"))
-						case "restart":
-							err := dockerCli.StopContainer(containerId, 60)
-							if err != nil {
-								http.Error(writer, err.Error(), http.StatusInternalServerError)
-								return
-							}
-							appDir := filepath.Join("/etc/slipstream/", containerId+".json")
-							file, err := os.Open(appDir)
-							if err != nil {
-								http.Error(writer, err.Error(), http.StatusInternalServerError)
-								return
-							}
-							var hostCfg docker.HostConfig
-							err = json.NewDecoder(file).Decode(&hostCfg)
-							if err != nil {
-								http.Error(writer, err.Error(), http.StatusInternalServerError)
-								return
-							}
-							err = dockerCli.StartContainer(containerId, &hostCfg)
-							if err != nil {
-								http.Error(writer, err.Error(), http.StatusInternalServerError)
-								return
-							}
-							writer.Write([]byte("successfully restarted the server"))
-						case "start":
-							appDir := filepath.Join("/etc/slipstream/", containerId+".json")
-							file, err := os.Open(appDir)
-							if err != nil {
-								http.Error(writer, err.Error(), http.StatusInternalServerError)
-								return
-							}
-							var hostCfg docker.HostConfig
-							err = json.NewDecoder(file).Decode(&hostCfg)
-							if err != nil {
-								http.Error(writer, err.Error(), http.StatusInternalServerError)
-								return
-							}
-							err = dockerCli.StartContainer(containerId, &hostCfg)
-							if err != nil {
-								http.Error(writer, err.Error(), http.StatusInternalServerError)
-								return
-							}
-							writer.Write([]byte("successfully started the server"))
-
-							// add kill too
+						err := dockerCli.RemoveContainer(docker.RemoveContainerOptions{
+							ID:            containerId,
+							RemoveVolumes: true,
+						})
+						if err != nil {
+							http.Error(writer, err.Error(), http.StatusInternalServerError)
+							return
 						}
-
+						appDir := filepath.Join("/etc/slipstream/", containerId+".json")
+						err = os.Remove(appDir)
+						if err != nil {
+							http.Error(writer, err.Error(), http.StatusInternalServerError)
+							return
+						}
+						writer.Write([]byte("successfully delete server id: " + containerId))
+					})
+					r.Post("/command", func(writer http.ResponseWriter, request *http.Request) {
+						command := request.URL.Query().Get("command")
+						containerId := chi.URLParam(request, "uuid")
+						cmd := append([]string{"rcon-cli"}, command)
+						exec, err := dockerCli.CreateExec(docker.CreateExecOptions{
+							Cmd:          cmd,
+							Container:    containerId,
+							AttachStdout: true,
+							AttachStderr: true,
+						})
+						if err != nil {
+							http.Error(writer, err.Error(), http.StatusInternalServerError)
+							return
+						}
+						var stdout, stderr bytes.Buffer
+						err = dockerCli.StartExec(exec.ID, docker.StartExecOptions{
+							OutputStream: &stdout,
+							ErrorStream:  &stderr,
+						})
+						if err != nil {
+							http.Error(writer, err.Error(), http.StatusInternalServerError)
+							return
+						}
+						writer.Header().Set("Content-Type", "application/json")
+						err = json.NewEncoder(writer).Encode(map[string]string{
+							"stdout": stdout.String(),
+							"stderr": stderr.String(),
+						})
+						if err != nil {
+							http.Error(writer, err.Error(), http.StatusInternalServerError)
+							return
+						}
 					})
 				})
-				r.Delete("/", func(writer http.ResponseWriter, request *http.Request) {
-					containerId := chi.URLParam(request, "uuid")
-					err := dockerCli.RemoveContainer(docker.RemoveContainerOptions{
-						ID:            containerId,
-						RemoveVolumes: true,
-					})
-					if err != nil {
-						http.Error(writer, err.Error(), http.StatusInternalServerError)
-						return
-					}
-					appDir := filepath.Join("/etc/slipstream/", containerId+".json")
-					err = os.Remove(appDir)
-					if err != nil {
-						http.Error(writer, err.Error(), http.StatusInternalServerError)
-						return
-					}
-					writer.Write([]byte("successfully delete server id: " + containerId))
-				})
-				r.Post("/command", func(writer http.ResponseWriter, request *http.Request) {
-					command := request.URL.Query().Get("command")
-					containerId := chi.URLParam(request, "uuid")
-					cmd := append([]string{"rcon-cli"}, command)
-					exec, err := dockerCli.CreateExec(docker.CreateExecOptions{
-						Cmd:          cmd,
-						Container:    containerId,
-						AttachStdout: true,
-						AttachStderr: true,
-					})
-					if err != nil {
-						http.Error(writer, err.Error(), http.StatusInternalServerError)
-						return
-					}
-					var stdout, stderr bytes.Buffer
-					err = dockerCli.StartExec(exec.ID, docker.StartExecOptions{
-						OutputStream: &stdout,
-						ErrorStream:  &stderr,
-					})
-					if err != nil {
-						http.Error(writer, err.Error(), http.StatusInternalServerError)
-						return
-					}
-					writer.Header().Set("Content-Type", "application/json")
-					err = json.NewEncoder(writer).Encode(map[string]string{
-						"stdout": stdout.String(),
-						"stderr": stderr.String(),
-					})
-					if err != nil {
-						http.Error(writer, err.Error(), http.StatusInternalServerError)
-						return
-					}
-				})
-				r.Get("/ws", handleWs(dockerCli))
 			})
 		})
 	})
@@ -362,7 +368,6 @@ func handleWs(dockerCli *docker.Client) http.HandlerFunc {
 			for {
 				_, _, err := conn.ReadMessage()
 				if err != nil {
-					conn.WriteMessage(websocket.TextMessage, []byte(err.Error()))
 					cancel()
 					return
 				}
@@ -370,22 +375,50 @@ func handleWs(dockerCli *docker.Client) http.HandlerFunc {
 		}()
 
 		pR, pW := io.Pipe()
+		defer pR.Close()
 		go func() {
 			defer pW.Close()
-			err := dockerCli.Logs(docker.LogsOptions{
-				Context:      ctx,
-				Container:    containerId,
-				OutputStream: pW,
-				ErrorStream:  pW,
-				Tail:         "100",
-				Follow:       true,
-				Stdout:       true,
-				Stderr:       true,
-				RawTerminal:  true,
-			})
-			if err != nil {
-				conn.WriteMessage(websocket.TextMessage, []byte(err.Error()))
-				return
+			logsRan := false
+			for {
+				if !logsRan {
+					err := dockerCli.Logs(docker.LogsOptions{
+						Context:      ctx,
+						Container:    containerId,
+						OutputStream: pW,
+						ErrorStream:  pW,
+						Tail:         "100",
+						Follow:       true,
+						Stdout:       true,
+						Stderr:       true,
+						RawTerminal:  true,
+					})
+					if err != nil {
+						log.Printf(err.Error())
+						return
+					}
+					logsRan = true
+				} else {
+					err := dockerCli.Logs(docker.LogsOptions{
+						Context:      ctx,
+						Container:    containerId,
+						OutputStream: pW,
+						ErrorStream:  pW,
+						Tail:         "0",
+						Follow:       true,
+						Stdout:       true,
+						Stderr:       true,
+						RawTerminal:  true,
+					})
+					if err != nil {
+						log.Printf(err.Error())
+						return
+					}
+					select {
+					case <-ctx.Done():
+						return
+					case <-time.After(time.Second):
+					}
+				}
 			}
 		}()
 
@@ -400,7 +433,6 @@ func handleWs(dockerCli *docker.Client) http.HandlerFunc {
 				}
 			}
 			if err != nil {
-				conn.WriteMessage(websocket.TextMessage, []byte(err.Error()))
 				return
 			}
 		}

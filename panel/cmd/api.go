@@ -10,6 +10,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"html"
 	"html/template"
 	"io"
 	"log"
@@ -21,6 +22,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/gorilla/websocket"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgtype"
 
@@ -283,7 +285,7 @@ func (app *api) Mount() http.Handler {
 			serverId := r.URL.Query().Get("uuid")
 			server, err := getServer(r.Context(), pool, serverId, userId)
 			if err != nil {
-				log.Printf("failed to server from uuid: %s", err.Error())
+				log.Printf("failed to get server from uuid: %s", err.Error())
 				http.Error(w, err.Error(), http.StatusInternalServerError)
 				return
 			}
@@ -383,8 +385,79 @@ func (app *api) Mount() http.Handler {
 			}
 			defer do.Body.Close()
 			if do.StatusCode == http.StatusOK {
-				w.Header().Set("HX-Redirect", "/server?uuid="+server.ServerId)
-				w.WriteHeader(http.StatusOK)
+				http.Redirect(w, r, "/server?uuid="+server.ServerId, http.StatusSeeOther)
+				return
+			}
+		})
+		r.Get("/ws", func(w http.ResponseWriter, r *http.Request) {
+			userId, validSession, err := getSessionValidity(r.Context(), pool, r) // _ is userid
+			if err != nil {
+				log.Printf("session validity check failed, error : %s", err.Error())
+				http.Error(w, err.Error(), http.StatusInternalServerError)
+				return
+			}
+			if !validSession {
+				http.Redirect(w, r, "/login", http.StatusSeeOther)
+				return
+			}
+			serverId := r.URL.Query().Get("uuid")
+			server, err := getServer(r.Context(), pool, serverId, userId)
+			if err != nil {
+				log.Printf("failed to get server info: %s", err.Error())
+				http.Error(w, err.Error(), http.StatusInternalServerError)
+				return
+			}
+			log.Println(server.Node.IpAddress + ":" + server.Node.Port)
+			fConn, err := upgrader.Upgrade(w, r, nil) // fConn = frontendConn
+			if err != nil {
+				log.Printf("failed to upgrade connection to WS: %s", err.Error())
+				return
+			}
+			defer fConn.Close()
+			headers := http.Header{}
+			headers.Add("Authorization", "Bearer "+server.Node.Token)
+			u := url.URL{Scheme: "ws", Host: server.Node.IpAddress + ":" + server.Node.Port, Path: "/api/servers/" + server.ServerId + "/ws"}
+			conn, resp, err := websocket.DefaultDialer.Dial(u.String(), headers)
+			if err != nil {
+				if resp != nil {
+					content, _ := io.ReadAll(resp.Body)
+					defer resp.Body.Close()
+					log.Printf("Handshake failed: %v. Error: %s", resp.StatusCode, string(content))
+				}
+				log.Printf("failed to get server info: %s", err.Error())
+				return
+			}
+			defer conn.Close()
+			go func() {
+				defer conn.Close()
+				defer fConn.Close()
+				for {
+					_, msgBytes, err := conn.ReadMessage()
+					if err != nil {
+						log.Printf("failed to get read messages: %s", err.Error())
+						return
+					}
+					// umm actually i gotta write html as the message containing the other message if that makes sense
+					msg := "<div id=\"logs\" hx-swap-oob=\"beforeend\" class=\"mx-2\"><p>" + html.EscapeString(string(msgBytes)) + "</p></div>"
+					err = fConn.WriteMessage(websocket.TextMessage, []byte(msg))
+					if err != nil {
+						log.Printf("failed to get write message: %s", err.Error())
+						return
+					}
+				}
+			}()
+
+			for {
+				_, msgBytes, err := fConn.ReadMessage()
+				if err != nil {
+					log.Printf("failed to get read messages: %s", err.Error())
+					return
+				}
+				err = conn.WriteMessage(websocket.TextMessage, msgBytes)
+				if err != nil {
+					log.Printf("failed to get write message: %s", err.Error())
+					return
+				}
 			}
 		})
 	})
@@ -1071,7 +1144,7 @@ func getNodeById(ctx context.Context, pool *pgxpool.Pool, nodeId string) (*nodes
 }
 
 func getUserServers(ctx context.Context, pool *pgxpool.Pool, userId string) ([]servers, error) {
-	query := `SELECT serverId, nodeId, name, image, ram_mb, cpu_limit, disk_mb FROM servers WHERE user_id = $1`
+	query := `SELECT serverId, nodeId, name, image, ram_mb, cpu_limit, disk_mb, user_id FROM servers WHERE user_id = $1`
 	rows, err := pool.Query(ctx, query, userId)
 	if err != nil {
 		return nil, err
@@ -1114,7 +1187,7 @@ func getUserServers(ctx context.Context, pool *pgxpool.Pool, userId string) ([]s
 }
 
 func getServer(ctx context.Context, pool *pgxpool.Pool, serverId, userId string) (servers, error) {
-	query := `SELECT nodeid, name, image, ram_mb, cpu_limit, disk_mb, serverid FROM servers WHERE serverid = $1 AND user_id = $2`
+	query := `SELECT nodeid, name, image, ram_mb, cpu_limit, disk_mb, serverid, user_id FROM servers WHERE serverid = $1 AND user_id = $2`
 	var currentServer servers
 	err := pool.QueryRow(ctx, query, serverId, userId).Scan(
 		&currentServer.NodeId,
@@ -1124,6 +1197,18 @@ func getServer(ctx context.Context, pool *pgxpool.Pool, serverId, userId string)
 		&currentServer.CpuLimit,
 		&currentServer.DiskMb,
 		&currentServer.ServerId,
+		&currentServer.UserId,
+	)
+	if err != nil {
+		return servers{}, err
+	}
+	query = `SELECT nodeid, name, ipaddr, port, token FROM nodes WHERE nodeid = $1`
+	err = pool.QueryRow(ctx, query, currentServer.NodeId).Scan(
+		&currentServer.Node.NodeId,
+		&currentServer.Node.NodeName,
+		&currentServer.Node.IpAddress,
+		&currentServer.Node.Port,
+		&currentServer.Node.Token,
 	)
 	if err != nil {
 		return servers{}, err
@@ -1204,4 +1289,12 @@ func getMainPort(ctx context.Context, pool *pgxpool.Pool, serverid string) (stri
 		return "0", err
 	}
 	return port, nil
+}
+
+var upgrader = websocket.Upgrader{
+	ReadBufferSize:  1024,
+	WriteBufferSize: 1024,
+	CheckOrigin: func(r *http.Request) bool {
+		return true
+	},
 }
