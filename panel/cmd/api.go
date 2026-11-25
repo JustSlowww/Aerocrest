@@ -71,15 +71,16 @@ type nodes struct {
 }
 
 type servers struct {
-	ServerId     string `db:"serverid"`
-	NodeId       string `db:"nodeid"`
-	Name         string `db:"name"`
-	Image        string `db:"image"`
-	RamMb        string `db:"ram_mb"`
-	CpuLimit     string `db:"cpu_limit"`
-	DiskMb       string `db:"disk_mb"`
-	ServerIpPort string `db:"-"`
-	Node         nodes  `db:"-"`
+	ServerId     string      `db:"serverid"`
+	NodeId       string      `db:"nodeid"`
+	Name         string      `db:"name"`
+	Image        string      `db:"image"`
+	RamMb        string      `db:"ram_mb"`
+	CpuLimit     string      `db:"cpu_limit"`
+	DiskMb       string      `db:"disk_mb"`
+	UserId       pgtype.UUID `db:"user_id"`
+	ServerIpPort string      `db:"-"`
+	Node         nodes       `db:"-"`
 }
 
 type newServer struct {
@@ -266,6 +267,7 @@ func (app *api) Mount() http.Handler {
 			return
 		}
 	})
+	// server control
 	router.Route("/server", func(r chi.Router) {
 		r.Get("/", func(w http.ResponseWriter, r *http.Request) {
 			userId, validSession, err := getSessionValidity(r.Context(), pool, r) // _ is userid
@@ -283,6 +285,10 @@ func (app *api) Mount() http.Handler {
 			if err != nil {
 				log.Printf("failed to server from uuid: %s", err.Error())
 				http.Error(w, err.Error(), http.StatusInternalServerError)
+				return
+			}
+			if server.UserId.String() != userId {
+				http.Redirect(w, r, "/", http.StatusSeeOther)
 				return
 			}
 			tokenMap, err := getUserInfoFromSessionToken(r.Context(), pool, r)
@@ -348,6 +354,10 @@ func (app *api) Mount() http.Handler {
 			if err != nil {
 				log.Printf("failed to server from uuid: %s", err.Error())
 				http.Error(w, err.Error(), http.StatusInternalServerError)
+				return
+			}
+			if server.UserId.String() != userId {
+				http.Redirect(w, r, "/", http.StatusSeeOther)
 				return
 			}
 			nodeInfo, err := getNodeById(r.Context(), pool, server.NodeId)
