@@ -107,11 +107,10 @@ func (app *api) Mount() http.Handler {
 					image := request.URL.Query().Get("image")
 					mem, err := strconv.Atoi(request.URL.Query().Get("ram")) // in mb
 					ssd := request.URL.Query().Get("ssd")                    // format ex 500M
-					mcVer := request.URL.Query().Get("version")
 					port := request.URL.Query().Get("port")
-					if mcVer == "" {
-						mcVer = "LATEST"
-					}
+					name := request.URL.Query().Get("name")
+					env := request.URL.Query()["env"]
+					env = append(env, fmt.Sprintf("MEMORY=%dM", mem-256))
 					if err != nil {
 						http.Error(writer, "ERROR: could not convert ram string to int: "+err.Error(), http.StatusBadRequest)
 						return
@@ -133,7 +132,7 @@ func (app *api) Mount() http.Handler {
 					container, err := dockerCli.CreateContainer(docker.CreateContainerOptions{
 						Config: &docker.Config{
 							Image:        image,
-							Env:          []string{"EULA=TRUE", "VERSION=" + mcVer, fmt.Sprintf("MEMORY=%dM", mem-256)},
+							Env:          env,
 							ExposedPorts: map[docker.Port]struct{}{"25565/tcp": {}},
 							Tty:          true,
 							OpenStdin:    true,
@@ -174,7 +173,16 @@ func (app *api) Mount() http.Handler {
 						return
 					}
 					appDir := "/etc/slipstream/"
-					byteData, err := json.MarshalIndent(info.HostConfig, "", "  ")
+					var serverInfo = struct {
+						Image string   `json:"image"`
+						Name  string   `json:"name"`
+						Env   []string `json:"Env"`
+					}{
+						Image: image,
+						Name:  name,
+						Env:   env,
+					}
+					byteData, err := json.MarshalIndent(serverInfo, "", "  ")
 					if err != nil {
 						http.Error(writer, err.Error(), http.StatusInternalServerError)
 						return

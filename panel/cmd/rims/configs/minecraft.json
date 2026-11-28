@@ -1,0 +1,8 @@
+{
+  "name": "Minecraft 26.3",
+  "image": "itzg/minecraft-server:latest",
+  "Env": [
+    "EULA=true",
+    "VERSION=26.3"
+  ]
+}

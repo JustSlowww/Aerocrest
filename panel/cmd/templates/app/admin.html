@@ -48,13 +48,42 @@
                 <a class="nav-link" data-bs-target="#nodes" data-bs-toggle="pill" type="button" role="tab">Nodes</a>
             </li>
             <li class="nav-item" role="presentation">
+                <a class="nav-link" data-bs-target="#rims" data-bs-toggle="pill" type="button" role="tab">Rims</a>
+            </li>
+            <li class="nav-item" role="presentation">
                 <a class="nav-link" data-bs-target="#settings" data-bs-toggle="pill" type="button" role="tab">Settings</a>
             </li>
         </div>
         <div class="vr"></div>
         <div class="tab-content p-2 flex-grow-1">
-            <div id="main" class="tab-pane fade show active" role="tabpanel">
+            <div id="main" class="tab-pane fade" role="tabpanel">
                 <a>Main admin settings</a>
+            </div>
+            <div id="rims" class="tab-pane fade" role="tabpanel">
+                <div class="d-flex justify-content-between align-items-center">
+                    <h3 class="mb-0"><strong>Rims:</strong></h3>
+                </div>
+                <hr/>
+                <div class="bigDiv">
+                    <div class="border rounded overflow-auto">
+                        <table class="table table-striped mb-0 table-hover">
+                            <thead>
+                            <tr>
+                                <th scope="col">Name</th>
+                                <th scope="col">Image</th>
+                            </tr>
+                            </thead>
+                            <tbody>
+                            <tr>
+                                {{range .Rims}}
+                                    <td>{{.Name}}</td>
+                                    <td>{{.Image}}</td>
+                                {{end}}
+                            </tr>
+                            </tbody>
+                        </table>
+                    </div>
+                </div>
             </div>
             <div id="nodes" class="tab-pane fade" role="tabpanel">
                 <div class="d-flex justify-content-between align-items-center">

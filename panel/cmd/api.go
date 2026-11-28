@@ -26,6 +26,8 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgtype"
 
+	"aerocrestPanel/cmd/rims"
+
 	"github.com/alexedwards/argon2id"
 	"github.com/go-chi/chi/v5"
 	"github.com/go-chi/chi/v5/middleware"
@@ -147,7 +149,10 @@ func (app *api) Mount() http.Handler {
 	if err != nil {
 		log.Fatalf("could not init allocations table. Err: %s", err.Error())
 	}
-
+	configs, err := rims.LoadConfigs()
+	if err != nil {
+		log.Fatalf("could not init configs. Err: %s", err.Error())
+	}
 	// templates for login logout notfound
 	tmpl := template.Must(template.ParseFS(templateFS,
 		"templates/*.html",
@@ -495,6 +500,7 @@ func (app *api) Mount() http.Handler {
 			"Username": tokenMap["username"].(string),
 			"Perms":    tokenMap["perms"],
 			"nodes":    nodesList,
+			"Rims":     configs,
 		})
 		if err != nil {
 			log.Printf("failed to render template: %s", err.Error())
@@ -530,6 +536,7 @@ func (app *api) Mount() http.Handler {
 			"Username": tokenMap["username"].(string),
 			"Perms":    tokenMap["perms"],
 			"nodes":    nodesList,
+			"rims":     configs,
 		})
 		if err != nil {
 			log.Printf("failed to render template: %s", err.Error())
@@ -563,14 +570,6 @@ func (app *api) Mount() http.Handler {
 			ram := r.PostForm.Get("ram")
 			cpu := r.PostForm.Get("cpu")
 			game := r.PostForm.Get("game")
-			allowedImages := map[string]bool{
-				"itzg/minecraft-server:latest": true,
-			}
-			if !allowedImages[game] {
-				log.Printf("invalid game")
-				http.Error(w, "invalid game", http.StatusBadRequest)
-				return
-			}
 			node := r.PostForm.Get("node")
 			nodeInfo, err := getNode(r.Context(), pool, node)
 			if err != nil {
@@ -580,67 +579,73 @@ func (app *api) Mount() http.Handler {
 			}
 			var serverI newServer
 			var servId string
-			if strings.Contains(game, "itzg/minecraft-server") {
-				port, err := getFreePort(r.Context(), pool, nodeInfo.NodeId)
-				if err != nil {
-					log.Printf("failed to get free port: %s", err.Error())
-					http.Error(w, "failed to get free port", http.StatusBadRequest)
-					return
+			port, err := getFreePort(r.Context(), pool, nodeInfo.NodeId)
+			if err != nil {
+				log.Printf("failed to get free port: %s", err.Error())
+				http.Error(w, "failed to get free port", http.StatusBadRequest)
+				return
+			}
+			var env []string
+			for _, c := range configs {
+				if c.Image == game {
+					env = append(env, c.Env...)
 				}
-				q := url.Values{}
-				q.Add("image", game)
-				q.Add("ram", ram)
-				q.Add("cpu", cpu)
-				q.Add("version", "26.3")
-				q.Add("ssd", disk+"M")
-				q.Add("port", port)
-				request, err := http.NewRequest("POST", "http://"+nodeInfo.IpAddress+":"+nodeInfo.Port+"/api/servers/minecraft?"+q.Encode(), nil)
+			}
+			q := url.Values{
+				"env": env,
+			}
+			q.Add("name", name)
+			q.Add("image", game)
+			q.Add("ram", ram)
+			q.Add("cpu", cpu)
+			q.Add("ssd", disk)
+			q.Add("port", port)
+			request, err := http.NewRequest("POST", "http://"+nodeInfo.IpAddress+":"+nodeInfo.Port+"/api/servers/minecraft?"+q.Encode(), nil)
+			if err != nil {
+				log.Printf("failed create server: %s", err.Error())
+				http.Error(w, "failed create server", http.StatusBadRequest)
+				return
+			}
+			request.Header.Set("Authorization", "Bearer "+nodeInfo.Token)
+			doReq, err := http.DefaultClient.Do(request)
+			if err != nil {
+				log.Printf("failed create server: %s", err.Error())
+				http.Error(w, "failed create server", http.StatusBadRequest)
+				return
+			}
+			defer doReq.Body.Close()
+			if doReq.StatusCode == http.StatusOK {
+				err = json.NewDecoder(doReq.Body).Decode(&serverI)
 				if err != nil {
 					log.Printf("failed create server: %s", err.Error())
 					http.Error(w, "failed create server", http.StatusBadRequest)
 					return
 				}
-				request.Header.Set("Authorization", "Bearer "+nodeInfo.Token)
-				doReq, err := http.DefaultClient.Do(request)
+				servId, err = createServer(r.Context(), pool, userId, nodeInfo.NodeName, servers{
+					NodeId:   nodeInfo.NodeId,
+					Name:     name,
+					Image:    game,
+					RamMb:    ram,
+					CpuLimit: cpu,
+					DiskMb:   disk,
+					Node:     *nodeInfo,
+					ServerId: serverI.Id,
+				})
 				if err != nil {
 					log.Printf("failed create server: %s", err.Error())
 					http.Error(w, "failed create server", http.StatusBadRequest)
 					return
 				}
-				defer doReq.Body.Close()
-				if doReq.StatusCode == http.StatusOK {
-					err = json.NewDecoder(doReq.Body).Decode(&serverI)
-					if err != nil {
-						log.Printf("failed create server: %s", err.Error())
-						http.Error(w, "failed create server", http.StatusBadRequest)
-						return
-					}
-					servId, err = createServer(r.Context(), pool, userId, nodeInfo.NodeName, servers{
-						NodeId:   nodeInfo.NodeId,
-						Name:     name,
-						Image:    game,
-						RamMb:    ram,
-						CpuLimit: cpu,
-						DiskMb:   disk,
-						Node:     *nodeInfo,
-						ServerId: serverI.Id,
-					})
-					if err != nil {
-						log.Printf("failed create server: %s", err.Error())
-						http.Error(w, "failed create server", http.StatusBadRequest)
-						return
-					}
-					_, err := newAllocation(r.Context(), pool, serverI.Id, nodeInfo.NodeId, port)
-					if err != nil {
-						log.Printf("failed to allocate port to server: %s", err.Error())
-						http.Error(w, "failed to allocate port to server", http.StatusBadRequest)
-						return
-					}
-				} else {
-					log.Printf("failed create server: %v", doReq.StatusCode)
-					http.Error(w, "failed create server", http.StatusInternalServerError)
+				_, err := newAllocation(r.Context(), pool, serverI.Id, nodeInfo.NodeId, port)
+				if err != nil {
+					log.Printf("failed to allocate port to server: %s", err.Error())
+					http.Error(w, "failed to allocate port to server", http.StatusBadRequest)
 					return
 				}
+			} else {
+				log.Printf("failed create server: %v", doReq.StatusCode)
+				http.Error(w, "failed create server", http.StatusInternalServerError)
+				return
 			}
 			if strings.TrimSpace(servId) == "" {
 				log.Print("failed create server: empty server id")

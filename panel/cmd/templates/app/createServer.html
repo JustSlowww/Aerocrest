@@ -36,7 +36,9 @@
                         <span class="input-group-text">Game</span>
                         <select class="form-select" aria-label="Select a game" id="game" name="game">
                             <option selected value="" disabled>Select a game</option>
-                            <option value="itzg/minecraft-server:latest">Minecraft 26.3 Latest</option>
+                            {{range .rims}}
+                            <option value="{{.Image}}">{{.Name}}</option>
+                            {{end}}
                         </select>
                     </div>
                     <div class="d-grid">
